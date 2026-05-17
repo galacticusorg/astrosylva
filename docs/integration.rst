@@ -5,9 +5,11 @@ ytree sample data
 -----------------
 
 `ytree <https://ytree.readthedocs.io/>`_ publishes a collection of
-real-world merger-tree samples covering every format astrosylva
-supports (Consistent-Trees, LHaloTree, SubLink, AHF, and others). The
-collection is hosted on the
+real-world merger-tree samples for the formats it supports —
+Consistent-Trees, LHaloTree, AHF, and others. SubLink is not one of
+those formats, so the SubLink reader isn't exercised against ytree
+data; its per-reader unit tests and the cross-reader equivalence
+suite cover it instead. The collection is hosted on the
 `yt Hub <https://girder.hub.yt/#collection/59835a1ee2a67400016a2cda>`_
 and is too large to bundle with this repository.
 

@@ -1,8 +1,12 @@
 """Optional integration tests against ytree's sample datasets.
 
 The `ytree project <https://ytree.readthedocs.io>`_ publishes a
-collection of real merger-tree samples covering every format we
-support (Consistent-Trees, LHaloTree, SubLink, AHF, and others).
+collection of real merger-tree samples for the formats it supports —
+Consistent-Trees, LHaloTree, AHF, plus a few others. SubLink is not
+in that list and has no ytree sample, so it isn't exercised here;
+the SubLink reader is covered by per-reader unit tests and the
+cross-reader equivalence suite instead.
+
 The data set is too large to bundle with this repository, but if
 you've downloaded it locally — see
 https://ytree.readthedocs.io/en/latest/Data.html — these tests will
@@ -26,7 +30,6 @@ from astrosylva.readers import ReaderSource
 from astrosylva.readers.ahf import AHFReader
 from astrosylva.readers.consistent_trees import ConsistentTreesReader
 from astrosylva.readers.lhalotree import LHaloTreeReader
-from astrosylva.readers.sublink import SubLinkReader
 
 
 def _ytree_root() -> Path | None:
@@ -102,35 +105,6 @@ def test_ytree_lhalotree_sample() -> None:
             f"({snap_table_candidates}) to look up expansion factors."
         )
     reader = LHaloTreeReader(
-        ReaderSource(
-            {
-                "tree_files": [str(p) for p in chunks],
-                "snapshot_table": str(snap_table),
-            }
-        )
-    )
-    assert len(reader) > 0
-    forest = next(iter(reader))
-    assert forest.n_halos > 0
-
-
-@pytest.mark.skipif(_ROOT is None, reason=_SKIP_REASON)
-def test_ytree_sublink_sample() -> None:
-    """Smoke-test against ytree's SubLink sample."""
-    assert _ROOT is not None
-    sample_dir = _ROOT / "sublink"
-    if not sample_dir.is_dir():
-        pytest.skip(f"ytree SubLink sample not found at {sample_dir}")
-    chunks = sorted(sample_dir.glob("tree_extended.*.hdf5"))
-    if not chunks:
-        pytest.skip(f"no tree_extended.*.hdf5 files in {sample_dir}")
-    snap_table = sample_dir / "snap_a.txt"
-    if not snap_table.is_file():
-        pytest.skip(
-            f"ytree SubLink sample at {sample_dir} needs a snap_a.txt "
-            "(snap_num scale_factor per line) for SubLink expansion factors."
-        )
-    reader = SubLinkReader(
         ReaderSource(
             {
                 "tree_files": [str(p) for p in chunks],
