@@ -76,15 +76,53 @@ _HEADER_COL_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\d+\)$")
 
 
 def _parse_header_columns(line: str) -> dict[str, int]:
-    """Parse the ``#scale(0) id(1) desc_scale(2) ...`` header line."""
+    """Parse a ``#scale(0) id(1) ... TrailingName ...`` CT header line.
+
+    Two token shapes are recognised:
+
+    - ``name(N)`` — explicit 0-based position; stored at index ``N``.
+    - Plain identifier (no parens) appearing *after* the first indexed
+      token — inherits the next sequential index. CT builds often tack
+      extra columns like ``Rs_Klypin``, ``Mvir_all``, ``M200b`` onto
+      the end of the header without ``(N)`` annotations; this keeps
+      them addressable by name.
+
+    Tokens with parens but not matching ``name(N)`` (e.g.
+    ``b_to_a(500c)``, ``mmp?(14)``) still advance the position
+    counter — they occupy a slot in the data row — but their names are
+    not stored.
+    """
     tokens = line.lstrip("#").split()
     cols: dict[str, int] = {}
+    next_index: int | None = None
     for tok in tokens:
         m = _HEADER_COL_RE.match(tok)
-        if m is None:
+        if m is not None:
+            idx = int(tok[tok.index("(") + 1 : tok.index(")")])
+            cols[m.group(1)] = idx
+            next_index = idx + 1
             continue
-        cols[m.group(1)] = int(tok[tok.index("(") + 1 : tok.index(")")])
+        if next_index is None:
+            # Pre-indexed garbage (shouldn't happen in well-formed CT).
+            continue
+        if "(" not in tok and ")" not in tok:
+            cols[tok] = next_index
+        next_index += 1
     return cols
+
+
+def _find_col(cols: dict[str, int], name: str) -> int:
+    """Look up a column position by case-insensitive name match.
+
+    Different CT versions vary on capitalisation (``Mvir`` vs ``mvir``,
+    ``Rs_Klypin`` vs ``rs_klypin``); the reader's canonical lookups
+    use lowercase and resolve against whatever the file has.
+    """
+    lower = name.lower()
+    for key, value in cols.items():
+        if key.lower() == lower:
+            return value
+    raise KeyError(name)
 
 
 def _parse_cosmology_header(lines: list[str]) -> dict[str, float]:
@@ -315,6 +353,52 @@ class ConsistentTreesReader(TreeReader):
             weight=forest_ref.weight,
         )
 
+    def _resolve_columns_for(self, tree: _TreeRef) -> dict[str, int]:
+        """Map every column the reader needs to its 0-based index in the
+        tree file. Raises :class:`ReaderError` on any missing field with a
+        message that names the column."""
+        cols = self._column_map(tree.file_path)
+        required = (
+            "scale",
+            "id",
+            "desc_id",
+            "mvir",
+            "x",
+            "y",
+            "z",
+            "vx",
+            "vy",
+            "vz",
+            "Jx",
+            "Jy",
+            "Jz",
+            "Spin",
+        )
+        out: dict[str, int] = {}
+        for name in required:
+            try:
+                out[name] = _find_col(cols, name)
+            except KeyError as exc:
+                raise ReaderError(
+                    f"Tree file {tree.file_path} is missing required column {name!r}"
+                ) from exc
+        try:
+            out["host"] = _find_col(cols, self._host_source)
+        except KeyError as exc:
+            raise ReaderError(
+                f"Tree file {tree.file_path} has no {self._host_source!r} column "
+                "for host_source; pick a different host_source."
+            ) from exc
+        rs_key = "rs_klypin" if self._scale_radius_source == "rs_klypin" else "rs"
+        try:
+            out["rs"] = _find_col(cols, rs_key)
+        except KeyError as exc:
+            raise ReaderError(
+                f"Tree file {tree.file_path} has no {rs_key!r} column; "
+                "set options.scale_radius_source accordingly."
+            ) from exc
+        return out
+
     def _load_tree(self, fh: TextIO, tree: _TreeRef) -> np.ndarray:
         """Parse one tree's halos from an already-open file handle.
 
@@ -322,28 +406,17 @@ class ConsistentTreesReader(TreeReader):
         seeks to ``tree.offset`` and reads forward until the next ``#``
         line or EOF.
         """
-        cols = self._column_map(tree.file_path)
-        try:
-            i_scale = cols["scale"]
-            i_id = cols["id"]
-            i_desc_id = cols["desc_id"]
-            i_mvir = cols["mvir"]
-            i_x, i_y, i_z = cols["x"], cols["y"], cols["z"]
-            i_vx, i_vy, i_vz = cols["vx"], cols["vy"], cols["vz"]
-            i_jx, i_jy, i_jz = cols["Jx"], cols["Jy"], cols["Jz"]
-            i_spin = cols["Spin"]
-        except KeyError as exc:
-            raise ReaderError(
-                f"Tree file {tree.file_path} is missing required column {exc}"
-            ) from exc
-        i_host = cols[self._host_source]
-        rs_key = "rs_klypin" if self._scale_radius_source == "rs_klypin" else "rs"
-        if rs_key not in cols:
-            raise ReaderError(
-                f"Tree file {tree.file_path} has no {rs_key!r} column; "
-                "set options.scale_radius_source accordingly."
-            )
-        i_rs = cols[rs_key]
+        ci = self._resolve_columns_for(tree)
+        i_scale = ci["scale"]
+        i_id = ci["id"]
+        i_desc_id = ci["desc_id"]
+        i_mvir = ci["mvir"]
+        i_x, i_y, i_z = ci["x"], ci["y"], ci["z"]
+        i_vx, i_vy, i_vz = ci["vx"], ci["vy"], ci["vz"]
+        i_jx, i_jy, i_jz = ci["Jx"], ci["Jy"], ci["Jz"]
+        i_spin = ci["Spin"]
+        i_host = ci["host"]
+        i_rs = ci["rs"]
 
         # Read raw rows starting at the tree's byte offset, stopping at the
         # next ``#`` line or EOF.
