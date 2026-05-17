@@ -28,6 +28,23 @@ Two AHF mtree variants are recognised:
 tokens wide and ``block`` when every record is at least three; mixed
 widths raise.
 
+Units
+-----
+
+Standard AHF emits positions in Mpc/h and Rvir in kpc/h; both defaults
+match. Override either per build via ``options.units``:
+
+.. code-block:: yaml
+
+   options:
+     units:
+       position: kpc/h   # default Mpc/h
+       radius:   Mpc/h   # default kpc/h
+
+Supported length units: ``Mpc/h``, ``kpc/h``. Mass (``Mvir``) is passed
+through as M_sun/h and velocity as km/s — those are unconditional in
+the AHF builds we've seen.
+
 Status: experimental — column layout is auto-detected from the
 ``.AHF_halos`` header (``#name(1) name(2) ...``) and falls back to the
 defaults below when the file has no recognisable header. Override
@@ -93,6 +110,26 @@ def _parse_ahf_header(line: str) -> dict[str, int]:
 
 _VALID_MTREE_FORMATS = ("auto", "idx", "block")
 
+# Multipliers from each supported length unit to the canonical Mpc/h.
+_LENGTH_UNIT_TO_MPCH: dict[str, float] = {
+    "kpc/h": 1e-3,
+    "Mpc/h": 1.0,
+}
+
+# Per-quantity defaults. AHF's standard build emits positions in Mpc/h and
+# Rvir in kpc/h; override either via ``options.units``.
+_DEFAULT_UNITS: dict[str, str] = {
+    "position": "Mpc/h",
+    "radius": "kpc/h",
+}
+
+
+def _length_scale_factor(value: str, *, key: str) -> float:
+    if value not in _LENGTH_UNIT_TO_MPCH:
+        valid = sorted(_LENGTH_UNIT_TO_MPCH)
+        raise ReaderError(f"Unknown length unit {value!r} for {key}; expected one of {valid}")
+    return _LENGTH_UNIT_TO_MPCH[value]
+
 
 class AHFReader(TreeReader):
     """Reader for AHF halo catalogues + merger-tree files."""
@@ -117,6 +154,25 @@ class AHFReader(TreeReader):
             self._column_overrides: dict[str, int] = {str(k): int(v) for k, v in overrides.items()}
         except (TypeError, ValueError) as exc:
             raise ReaderError("options.columns values must be integer column indices") from exc
+
+        units = self.options.get("units", {}) or {}
+        if not isinstance(units, dict):
+            raise ReaderError(
+                "options.units must be a mapping of quantity to unit string; "
+                f"got {type(units).__name__}"
+            )
+        unknown = set(units.keys()) - set(_DEFAULT_UNITS.keys())
+        if unknown:
+            raise ReaderError(
+                f"Unknown options.units keys: {sorted(unknown)}; "
+                f"expected a subset of {sorted(_DEFAULT_UNITS)}"
+            )
+        self._position_scale = _length_scale_factor(
+            units.get("position", _DEFAULT_UNITS["position"]), key="units.position"
+        )
+        self._radius_scale = _length_scale_factor(
+            units.get("radius", _DEFAULT_UNITS["radius"]), key="units.radius"
+        )
 
     def metadata(self) -> Metadata:
         return Metadata(units=dict(DEFAULT_UNITS))
@@ -191,11 +247,11 @@ class AHFReader(TreeReader):
             halos["hostIndex"][k] = int(row[c["hostHalo"]])
             halos["expansionFactor"][k] = a
             halos["nodeMass"][k] = float(row[c["Mvir"]])
-            halos["scaleRadius"][k] = float(row[c["Rvir"]]) / 1000.0  # kpc/h -> Mpc/h
+            halos["scaleRadius"][k] = float(row[c["Rvir"]]) * self._radius_scale
             halos["halfMassRadius"][k] = np.nan  # AHF default output lacks half-mass radius
-            halos["position"][k, 0] = float(row[c["Xc"]]) / 1000.0
-            halos["position"][k, 1] = float(row[c["Yc"]]) / 1000.0
-            halos["position"][k, 2] = float(row[c["Zc"]]) / 1000.0
+            halos["position"][k, 0] = float(row[c["Xc"]]) * self._position_scale
+            halos["position"][k, 1] = float(row[c["Yc"]]) * self._position_scale
+            halos["position"][k, 2] = float(row[c["Zc"]]) * self._position_scale
             halos["velocity"][k, 0] = float(row[c["VXc"]])
             halos["velocity"][k, 1] = float(row[c["VYc"]])
             halos["velocity"][k, 2] = float(row[c["VZc"]])

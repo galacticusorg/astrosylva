@@ -300,3 +300,80 @@ def test_columns_option_rejects_non_integer_values() -> None:
             ReaderSource({"snapshots": []}),
             options={"columns": {"lambda": "ten"}},
         )
+
+
+# ----------------------------------------------------------------- units
+
+
+def test_default_position_is_mpch(
+    ahf_with_real_header: list[dict[str, object]],
+) -> None:
+    """Standard AHF emits positions in Mpc/h; the reader's default is now
+    Mpc/h (no conversion)."""
+    reader = AHFReader(ReaderSource({"snapshots": ahf_with_real_header}))
+    forest = next(iter(reader))
+    by_id = {int(h["nodeIndex"]): np.array(h["position"]) for h in forest.halos}
+    # Fixture writes pos=(5.0, 5.0, 5.0) for halo 100.
+    np.testing.assert_allclose(by_id[100], [5.0, 5.0, 5.0])
+
+
+def test_default_radius_is_kpch_to_mpch(
+    ahf_with_real_header: list[dict[str, object]],
+) -> None:
+    """Standard AHF emits Rvir in kpc/h; default conversion -> Mpc/h."""
+    reader = AHFReader(ReaderSource({"snapshots": ahf_with_real_header}))
+    forest = next(iter(reader))
+    by_id = {int(h["nodeIndex"]): float(h["scaleRadius"]) for h in forest.halos}
+    # Fixture writes Rvir=200 (kpc/h) -> 0.2 Mpc/h.
+    assert by_id[100] == 0.2
+
+
+def test_position_units_kpch_override(
+    ahf_with_real_header: list[dict[str, object]],
+) -> None:
+    """Builds that emit positions in kpc/h get the legacy /1000 conversion
+    by setting options.units.position='kpc/h'."""
+    reader = AHFReader(
+        ReaderSource({"snapshots": ahf_with_real_header}),
+        options={"units": {"position": "kpc/h"}},
+    )
+    forest = next(iter(reader))
+    by_id = {int(h["nodeIndex"]): np.array(h["position"]) for h in forest.halos}
+    np.testing.assert_allclose(by_id[100], [0.005, 0.005, 0.005])
+
+
+def test_radius_units_mpch_override(
+    ahf_with_real_header: list[dict[str, object]],
+) -> None:
+    """Builds that already emit Rvir in Mpc/h: no conversion."""
+    reader = AHFReader(
+        ReaderSource({"snapshots": ahf_with_real_header}),
+        options={"units": {"radius": "Mpc/h"}},
+    )
+    forest = next(iter(reader))
+    by_id = {int(h["nodeIndex"]): float(h["scaleRadius"]) for h in forest.halos}
+    assert by_id[100] == 200.0
+
+
+def test_units_unknown_length_unit_raises() -> None:
+    with pytest.raises(ReaderError, match=r"Unknown length unit"):
+        AHFReader(
+            ReaderSource({"snapshots": []}),
+            options={"units": {"position": "parsec"}},
+        )
+
+
+def test_units_unknown_key_raises() -> None:
+    with pytest.raises(ReaderError, match=r"Unknown options\.units keys"):
+        AHFReader(
+            ReaderSource({"snapshots": []}),
+            options={"units": {"velocity": "km/s"}},  # not yet a supported key
+        )
+
+
+def test_units_non_mapping_raises() -> None:
+    with pytest.raises(ReaderError, match=r"options\.units must be a mapping"):
+        AHFReader(
+            ReaderSource({"snapshots": []}),
+            options={"units": "Mpc/h"},
+        )
