@@ -87,13 +87,24 @@ Host pointers that reference a subhalo outside the current forest
 (common across SubLink chunks) are silently remapped to self, matching
 Galacticus's "no host" convention.
 
-Status: experimental — reads a single chunk.
+Streaming
+---------
+
+Indexing loads only the small per-halo bookkeeping fields (SubhaloID,
+DescendantID, RootDescendantID, SnapNum, raw host pointers) across all
+chunks; this is what union-find needs and what ``__len__`` returns.
+Payload arrays (mass, half-mass radius, position, velocity, spin) are
+read lazily from the HDF5 files per-forest, so peak memory scales with
+the largest single forest rather than the whole run.
+
+Status: experimental.
 """
 
 from __future__ import annotations
 
 import warnings
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -113,6 +124,12 @@ from astrosylva.readers._forests import (
 from astrosylva.readers._snapshot_table import apply_scale_factors, load_snap_table
 from astrosylva.readers.base import ReaderSource, TreeReader
 from astrosylva.schema import DEFAULT_UNITS, HALO_DTYPE, Forest, Metadata
+
+
+@dataclass
+class _ChunkRef:
+    path: Path
+    n_halos: int
 
 
 class SubLinkReader(TreeReader):
@@ -138,16 +155,16 @@ class SubLinkReader(TreeReader):
             )
         self._snap_to_a = load_snap_table(source, self.options)
 
-        # Populated by _ensure_indexed.
+        # Index-time arrays populated by _ensure_indexed (cheap, kept).
+        # Halo payload (mass, radius, position, velocity, angular
+        # momentum) is streamed per-forest from the HDF5 files in
+        # __iter__ rather than held in memory.
         self._forest_index: dict[int, np.ndarray] | None = None
+        self._chunk_refs: list[_ChunkRef] | None = None
+        self._chunk_offsets: np.ndarray | None = None
         self._node_ids: np.ndarray | None = None
         self._descendants: np.ndarray | None = None
         self._snap_nums: np.ndarray | None = None
-        self._mass: np.ndarray | None = None
-        self._radius: np.ndarray | None = None
-        self._position: np.ndarray | None = None
-        self._velocity: np.ndarray | None = None
-        self._ang_mom: np.ndarray | None = None
         self._raw_hosts: np.ndarray | None = None
 
     # -------------------------------------------------------- public API
@@ -161,10 +178,24 @@ class SubLinkReader(TreeReader):
         return len(self._forest_index)
 
     def __iter__(self) -> Iterator[Forest]:
+        """Stream forests with payload loaded lazily per-forest.
+
+        Index-time arrays (IDs, descendants, hosts, snap nums) are kept in
+        memory; payload arrays (mass, radius, position, velocity, angular
+        momentum) are read on demand from each chunk, just for the halos
+        in the current forest. All chunk files are held open for the
+        duration of the iteration to avoid reopen overhead per forest.
+        """
         self._ensure_indexed()
         assert self._forest_index is not None
-        for forest_id, indices in self._forest_index.items():
-            yield Forest(forest_id=forest_id, halos=self._build_halos(indices))
+        assert self._chunk_refs is not None
+        files = [h5py.File(c.path, "r") for c in self._chunk_refs]
+        try:
+            for forest_id, indices in self._forest_index.items():
+                yield Forest(forest_id=forest_id, halos=self._build_halos(indices, files))
+        finally:
+            for f in files:
+                f.close()
 
     # ----------------------------------------------------------- helpers
 
@@ -191,7 +222,13 @@ class SubLinkReader(TreeReader):
             raise ReaderError("SubLink reader received an empty chunk list.")
         return paths
 
-    def _load_chunk(self, path: Path) -> dict[str, np.ndarray]:
+    def _load_chunk_index(self, path: Path) -> dict[str, np.ndarray]:
+        """Load only the small index-time fields from a chunk.
+
+        Payload arrays (mass / radius / position / velocity / spin)
+        are read lazily in :meth:`_build_halos`, so they don't all
+        have to sit in memory at once.
+        """
         if not path.is_file():
             raise ReaderError(f"SubLink tree file not found: {path}")
         with h5py.File(path, "r") as f:
@@ -206,11 +243,6 @@ class SubLinkReader(TreeReader):
                 "descendants": np.asarray(f["DescendantID"][:], dtype=np.int64),
                 "root_desc": np.asarray(f["RootDescendantID"][:], dtype=np.int64),
                 "snap_nums": snap_nums,
-                "mass": np.asarray(f["SubhaloMass"][:], dtype=np.float64) * 1e10,
-                "radius": np.asarray(f["SubhaloHalfmassRad"][:], dtype=np.float64) / 1000.0,
-                "position": np.asarray(f["SubhaloPos"][:], dtype=np.float64) / 1000.0,
-                "velocity": np.asarray(f["SubhaloVel"][:], dtype=np.float64),
-                "ang_mom": np.asarray(f["SubhaloSpin"][:], dtype=np.float64),
                 "raw_hosts": self._compute_raw_hosts(f, node_ids, snap_nums),
             }
 
@@ -218,16 +250,16 @@ class SubLinkReader(TreeReader):
         if self._forest_index is not None:
             return
         paths = self._resolve_chunk_paths()
-        chunks = [self._load_chunk(p) for p in paths]
+        chunks = [self._load_chunk_index(p) for p in paths]
+        per_chunk_n_halos = [int(c["node_ids"].shape[0]) for c in chunks]
+        self._chunk_refs = [
+            _ChunkRef(path=p, n_halos=n) for p, n in zip(paths, per_chunk_n_halos, strict=True)
+        ]
+        self._chunk_offsets = np.concatenate([[0], np.cumsum(per_chunk_n_halos)])
         self._node_ids = np.concatenate([c["node_ids"] for c in chunks])
         self._descendants = np.concatenate([c["descendants"] for c in chunks])
         root_desc = np.concatenate([c["root_desc"] for c in chunks])
         self._snap_nums = np.concatenate([c["snap_nums"] for c in chunks])
-        self._mass = np.concatenate([c["mass"] for c in chunks])
-        self._radius = np.concatenate([c["radius"] for c in chunks])
-        self._position = np.concatenate([c["position"] for c in chunks])
-        self._velocity = np.concatenate([c["velocity"] for c in chunks])
-        self._ang_mom = np.concatenate([c["ang_mom"] for c in chunks])
         self._raw_hosts = np.concatenate([c["raw_hosts"] for c in chunks])
 
         if self._forest_grouping == "root_descendant":
@@ -245,16 +277,14 @@ class SubLinkReader(TreeReader):
             reader_name="SubLink reader",
         )
 
-    def _build_halos(self, indices: np.ndarray) -> np.ndarray:
+    def _build_halos(self, indices: np.ndarray, files: list[h5py.File]) -> np.ndarray:
+        """Materialise one forest's halos. Payload is read lazily from
+        the open chunk handles, only for the rows in ``indices``."""
         assert self._node_ids is not None
         assert self._descendants is not None
         assert self._snap_nums is not None
-        assert self._mass is not None
-        assert self._radius is not None
-        assert self._position is not None
-        assert self._velocity is not None
-        assert self._ang_mom is not None
         assert self._raw_hosts is not None
+        assert self._chunk_offsets is not None
 
         n = len(indices)
         halos = np.empty(n, dtype=HALO_DTYPE)
@@ -265,16 +295,47 @@ class SubLinkReader(TreeReader):
         raw_hosts_forest = self._raw_hosts[indices]
         halos["hostIndex"] = _clamp_hosts_to_forest(raw_hosts_forest, node_ids)
         halos["expansionFactor"] = self._scale_factors_for(snap_nums)
-        halos["nodeMass"] = self._mass[indices]
         # SubLink stores a half-mass radius (SubhaloHalfmassRad) but no NFW
         # scale radius, so route it to halfMassRadius and leave scaleRadius
         # as NaN.
         halos["scaleRadius"] = np.nan
-        halos["halfMassRadius"] = self._radius[indices]
-        halos["position"] = self._position[indices]
-        halos["velocity"] = self._velocity[indices]
-        halos["angularMomentum"] = self._ang_mom[indices]
         halos["spin"] = 0.0
+
+        # Locate each halo's source chunk; read payload rows in one shot
+        # per chunk (h5py requires sorted indices for fancy indexing, so
+        # we sort, read, and unsort).
+        chunk_ids = np.searchsorted(self._chunk_offsets[1:], indices, side="right")
+        local_indices = indices - self._chunk_offsets[chunk_ids]
+
+        mass = np.empty(n, dtype=np.float64)
+        radius = np.empty(n, dtype=np.float64)
+        position = np.empty((n, 3), dtype=np.float64)
+        velocity = np.empty((n, 3), dtype=np.float64)
+        ang_mom = np.empty((n, 3), dtype=np.float64)
+        for chunk_id in np.unique(chunk_ids):
+            mask = chunk_ids == chunk_id
+            local_subset = local_indices[mask]
+            sort_order = np.argsort(local_subset)
+            sorted_local = local_subset[sort_order].tolist()
+            unsort_order = np.argsort(sort_order)
+            f = files[int(chunk_id)]
+            mass_slice = np.asarray(f["SubhaloMass"][sorted_local], dtype=np.float64) * 1e10
+            radius_slice = (
+                np.asarray(f["SubhaloHalfmassRad"][sorted_local], dtype=np.float64) / 1000.0
+            )
+            pos_slice = np.asarray(f["SubhaloPos"][sorted_local], dtype=np.float64) / 1000.0
+            vel_slice = np.asarray(f["SubhaloVel"][sorted_local], dtype=np.float64)
+            spin_slice = np.asarray(f["SubhaloSpin"][sorted_local], dtype=np.float64)
+            mass[mask] = mass_slice[unsort_order]
+            radius[mask] = radius_slice[unsort_order]
+            position[mask] = pos_slice[unsort_order]
+            velocity[mask] = vel_slice[unsort_order]
+            ang_mom[mask] = spin_slice[unsort_order]
+        halos["nodeMass"] = mass
+        halos["halfMassRadius"] = radius
+        halos["position"] = position
+        halos["velocity"] = velocity
+        halos["angularMomentum"] = ang_mom
         return halos
 
     def _compute_raw_hosts(

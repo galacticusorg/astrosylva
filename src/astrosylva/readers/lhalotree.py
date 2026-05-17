@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import struct
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -84,6 +85,13 @@ from astrosylva.exceptions import ReaderError
 from astrosylva.readers._snapshot_table import apply_scale_factors, load_snap_table
 from astrosylva.readers.base import ReaderSource, TreeReader
 from astrosylva.schema import DEFAULT_UNITS, HALO_DTYPE, Forest, Metadata
+
+
+@dataclass
+class _ChunkHeader:
+    path: Path
+    n_trees: int
+
 
 LHALO_HALO_DTYPE = np.dtype(
     [
@@ -123,8 +131,9 @@ class LHaloTreeReader(TreeReader):
         super().__init__(source, options)
         self._strict_scale_factors = bool(self.options.get("strict_scale_factors", True))
         self._snap_to_a = load_snap_table(source, self.options)
-        self._forests: list[np.ndarray] | None = None
-        self._forest_ids: list[int] | None = None
+        # Lightweight per-chunk metadata (path + tree count). Loaded once;
+        # halo payloads are streamed per-chunk in __iter__.
+        self._chunk_index: list[_ChunkHeader] | None = None
 
     # ------------------------------------------------------------ public
 
@@ -132,16 +141,26 @@ class LHaloTreeReader(TreeReader):
         return Metadata(units=dict(DEFAULT_UNITS))
 
     def __len__(self) -> int:
-        self._ensure_loaded()
-        assert self._forests is not None
-        return len(self._forests)
+        self._ensure_indexed()
+        assert self._chunk_index is not None
+        return sum(c.n_trees for c in self._chunk_index)
 
     def __iter__(self) -> Iterator[Forest]:
-        self._ensure_loaded()
-        assert self._forests is not None
-        assert self._forest_ids is not None
-        for fid, halos in zip(self._forest_ids, self._forests, strict=False):
-            yield Forest(forest_id=fid, halos=halos)
+        """Stream forests chunk-by-chunk.
+
+        Each chunk's halo payload lives in memory only while its trees
+        are being yielded; once we move to the next chunk the previous
+        one is released. The ``offset`` counter keeps ``nodeIndex``
+        unique across the whole iteration.
+        """
+        self._ensure_indexed()
+        assert self._chunk_index is not None
+        offset = 0
+        for chunk in self._chunk_index:
+            for raw_tree in self._load_chunk(chunk.path):
+                halos, forest_id = self._convert_tree(raw_tree, offset)
+                yield Forest(forest_id=forest_id, halos=halos)
+                offset += raw_tree.shape[0]
 
     # ----------------------------------------------------------- helpers
 
@@ -168,20 +187,32 @@ class LHaloTreeReader(TreeReader):
             raise ReaderError("LHaloTree reader received an empty chunk list.")
         return paths
 
-    def _ensure_loaded(self) -> None:
-        if self._forests is not None:
+    def _ensure_indexed(self) -> None:
+        """Read just the 8-byte chunk headers to learn tree counts.
+
+        No halo payloads are loaded here; that happens lazily in
+        :meth:`__iter__` so memory scales with one chunk at a time
+        rather than with the whole run.
+        """
+        if self._chunk_index is not None:
             return
-        forests: list[np.ndarray] = []
-        forest_ids: list[int] = []
-        offset = 0
+        chunks: list[_ChunkHeader] = []
         for path in self._resolve_chunk_paths():
-            for raw_tree in self._load_chunk(path):
-                halos, forest_id = self._convert_tree(raw_tree, offset)
-                forests.append(halos)
-                forest_ids.append(forest_id)
-                offset += raw_tree.shape[0]
-        self._forests = forests
-        self._forest_ids = forest_ids
+            chunks.append(_ChunkHeader(path=path, n_trees=self._read_chunk_n_trees(path)))
+        self._chunk_index = chunks
+
+    @staticmethod
+    def _read_chunk_n_trees(path: Path) -> int:
+        if not path.is_file():
+            raise ReaderError(f"LHaloTree file not found: {path}")
+        with path.open("rb") as fh:
+            header = fh.read(_HEADER_STRUCT.size)
+            if len(header) < _HEADER_STRUCT.size:
+                raise ReaderError(f"Truncated LHaloTree header in {path}")
+            n_trees, _ = _HEADER_STRUCT.unpack(header)
+        if n_trees < 0:
+            raise ReaderError(f"Negative tree count in {path}")
+        return int(n_trees)
 
     @staticmethod
     def _load_chunk(path: Path) -> list[np.ndarray]:
