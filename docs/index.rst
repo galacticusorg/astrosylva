@@ -13,6 +13,7 @@ input format.
 
    schema
    readers
+   integration
 
 Installation
 ------------

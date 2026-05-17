@@ -13,14 +13,19 @@ only), and ``angularMomentum`` / ``spin`` (Bullock convention differs).
 from __future__ import annotations
 
 import struct
+from collections.abc import Callable
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pytest
 
 from astrosylva.readers import ReaderSource
+from astrosylva.readers.ahf import AHFReader
+from astrosylva.readers.base import TreeReader
 from astrosylva.readers.consistent_trees import ConsistentTreesReader
 from astrosylva.readers.lhalotree import LHALO_HALO_DTYPE, LHaloTreeReader
+from astrosylva.readers.sublink import SubLinkReader
 from astrosylva.schema import HALO_DTYPE, Forest
 
 # ----------------------------------------------------- shared ground truth
@@ -127,6 +132,107 @@ def _write_lhalotree_fixture(tmp_path: Path) -> Path:
     return path
 
 
+def _write_sublink_fixture(tmp_path: Path) -> Path:
+    """Write the ground-truth thread as a single SubLink-style HDF5 chunk."""
+    path = tmp_path / "sublink_tree_extended.0.hdf5"
+    n = len(_GROUND_TRUTH)
+    # SubhaloIDs: 300 (snap 0), 200 (snap 1), 100 (snap 2). All share the
+    # final descendant 300 as RootDescendantID.
+    ids = np.array([300, 200, 100], dtype=np.int64)
+    desc = np.array([-1, 300, 200], dtype=np.int64)
+    first_prog = np.array([200, 100, -1], dtype=np.int64)
+    with h5py.File(path, "w") as f:
+        f.create_dataset("SubhaloID", data=ids)
+        f.create_dataset("DescendantID", data=desc)
+        f.create_dataset("FirstProgenitorID", data=first_prog)
+        f.create_dataset("NextProgenitorID", data=np.full(n, -1, dtype=np.int64))
+        f.create_dataset("RootDescendantID", data=np.full(n, 300, dtype=np.int64))
+        f.create_dataset("TreeID", data=np.full(n, 1, dtype=np.int64))
+        f.create_dataset(
+            "SnapNum", data=np.array([gt["snap"] for gt in _GROUND_TRUTH], dtype=np.int32)
+        )
+        # Each subhalo is its own FOF central.
+        f.create_dataset("FirstSubhaloInFOFGroupID", data=ids)
+        # SubhaloMass is stored in 10^10 M_sun/h, reader scales by 1e10.
+        f.create_dataset(
+            "SubhaloMass",
+            data=np.array([gt["mass"] / 1e10 for gt in _GROUND_TRUTH], dtype=np.float32),
+        )
+        # Half-mass radius (dummy; not compared cross-reader).
+        f.create_dataset("SubhaloHalfmassRad", data=np.ones(n, dtype=np.float32))
+        # SubhaloPos in kpc/h (reader / 1000 -> Mpc/h).
+        f.create_dataset(
+            "SubhaloPos",
+            data=np.array(
+                [[c * 1000.0 for c in gt["pos"]] for gt in _GROUND_TRUTH],
+                dtype=np.float32,
+            ),
+        )
+        f.create_dataset(
+            "SubhaloVel",
+            data=np.array([gt["vel"] for gt in _GROUND_TRUTH], dtype=np.float32),
+        )
+        f.create_dataset("SubhaloSpin", data=np.zeros((n, 3), dtype=np.float32))
+    return path
+
+
+# AHF helper — same 24-column layout as conftest's _ahf_halo_row, inlined
+# here so the cross-reader test file is self-contained.
+_AHF_FILLER = " ".join(["0"] * 8)  # columns 12..19
+
+
+def _ahf_row(halo_id: int, host: int, *, mvir: float, pos: tuple[float, float, float]) -> str:
+    return (
+        f"{halo_id} {host} 0 {mvir} 1000 "
+        f"{pos[0]} {pos[1]} {pos[2]} "
+        f"100 100 100 "  # VXc, VYc, VZc — overwritten below per snapshot
+        f"100 {_AHF_FILLER} 0.05 1e10 1e10 1e10\n"
+    )
+
+
+def _write_ahf_fixture(tmp_path: Path) -> list[dict[str, object]]:
+    """Write the ground-truth thread as an AHF snapshot sequence."""
+    # AHF halo IDs: 300 / 200 / 100 (newest first, matches CT for clarity).
+    # Snap 2 (oldest): halo 100; mtree links 100 -> 200.
+    # Snap 1:          halo 200; mtree links 200 -> 300.
+    # Snap 0 (latest): halo 300; no mtree.
+    snap_to_id = {0: 300, 1: 200, 2: 100}
+
+    snapshots: list[dict[str, object]] = []
+    # Iterate oldest -> latest (AHF reader expects this ordering).
+    for snap_index, gt in enumerate(
+        sorted(_GROUND_TRUTH, key=lambda g: int(g["snap"]), reverse=True)
+    ):
+        snap = int(gt["snap"])
+        halo_id = snap_to_id[snap]
+        halos_path = tmp_path / f"ahf_snap{snap:02d}.AHF_halos"
+        # Re-emit the row but overwrite the velocity columns with the
+        # ground-truth value for this halo.
+        base = _ahf_row(halo_id, 0, mvir=float(gt["mass"]), pos=gt["pos"])
+        tokens = base.split()
+        # _ahf_row writes VXc/VYc/VZc at positions 8/9/10.
+        tokens[8], tokens[9], tokens[10] = (str(v) for v in gt["vel"])
+        halos_path.write_text("# header\n" + " ".join(tokens) + "\n")
+
+        mtree_path: str | None = None
+        # All snaps except the latest get an .AHF_mtree_idx with a single
+        # ProgID DescID pair.
+        if snap > 0:
+            desc_halo = snap_to_id[snap - 1]
+            mtree_p = tmp_path / f"ahf_snap{snap:02d}.AHF_mtree_idx"
+            mtree_p.write_text(f"{halo_id} {desc_halo}\n")
+            mtree_path = str(mtree_p)
+        snapshots.append(
+            {
+                "halos": str(halos_path),
+                "mtree": mtree_path,
+                "a": float(gt["a"]),
+            }
+        )
+        del snap_index
+    return snapshots
+
+
 # ----------------------------------------------------- canonicalisation
 
 
@@ -173,6 +279,50 @@ def equivalence_inputs(tmp_path: Path) -> tuple[Path, Path, dict[int, float]]:
     lhalo_path = _write_lhalotree_fixture(tmp_path)
     scale_factors = {gt["snap"]: gt["a"] for gt in _GROUND_TRUTH}
     return ct_dir, lhalo_path, scale_factors
+
+
+def _build_ct_reader(tmp_path: Path) -> TreeReader:
+    ct_dir = _write_ct_fixture(tmp_path)
+    return ConsistentTreesReader(
+        ReaderSource(
+            {
+                "input_path": str(ct_dir),
+                "forests_path": str(ct_dir / "forests.list"),
+                "locations_path": str(ct_dir / "locations.dat"),
+            }
+        )
+    )
+
+
+def _build_lhalo_reader(tmp_path: Path) -> TreeReader:
+    lhalo_path = _write_lhalotree_fixture(tmp_path)
+    scale_factors = {gt["snap"]: gt["a"] for gt in _GROUND_TRUTH}
+    return LHaloTreeReader(
+        ReaderSource({"tree_file": str(lhalo_path)}),
+        options={"scale_factors": scale_factors},
+    )
+
+
+def _build_sublink_reader(tmp_path: Path) -> TreeReader:
+    sublink_path = _write_sublink_fixture(tmp_path)
+    scale_factors = {gt["snap"]: gt["a"] for gt in _GROUND_TRUTH}
+    return SubLinkReader(
+        ReaderSource({"tree_file": str(sublink_path)}),
+        options={"scale_factors": scale_factors},
+    )
+
+
+def _build_ahf_reader(tmp_path: Path) -> TreeReader:
+    snapshots = _write_ahf_fixture(tmp_path)
+    return AHFReader(ReaderSource({"snapshots": snapshots}))
+
+
+_ALL_READER_BUILDERS: dict[str, Callable[[Path], TreeReader]] = {
+    "consistent_trees": _build_ct_reader,
+    "lhalotree": _build_lhalo_reader,
+    "sublink": _build_sublink_reader,
+    "ahf": _build_ahf_reader,
+}
 
 
 # ----------------------------------------------------- the test
@@ -285,3 +435,78 @@ def test_ct_and_lhalotree_match_the_ground_truth(
         np.testing.assert_allclose(
             canon["velocity"], expected["velocity"], atol=1e-4, err_msg=reader_name
         )
+
+
+# ---------------------------------------------------- whole-suite equivalence
+
+
+@pytest.mark.parametrize("reader_name", sorted(_ALL_READER_BUILDERS))
+def test_every_reader_matches_ground_truth(reader_name: str, tmp_path: Path) -> None:
+    """All four readers, given semantically equivalent input, produce the
+    same Forest on the canonical schema fields."""
+    expected = np.empty(len(_GROUND_TRUTH), dtype=HALO_DTYPE)
+    sorted_gt = sorted(_GROUND_TRUTH, key=lambda g: (-g["a"], -g["mass"]))
+    for k, gt in enumerate(sorted_gt):
+        expected["nodeIndex"][k] = k
+        expected["descendantIndex"][k] = k - 1 if k > 0 else -1
+        expected["hostIndex"][k] = k  # central of its own FOF
+        expected["expansionFactor"][k] = gt["a"]
+        expected["nodeMass"][k] = gt["mass"]
+        expected["position"][k] = gt["pos"]
+        expected["velocity"][k] = gt["vel"]
+
+    builder = _ALL_READER_BUILDERS[reader_name]
+    reader = builder(tmp_path)
+    forests = list(reader)
+    assert len(forests) == 1, f"{reader_name} produced {len(forests)} forests, expected 1"
+    canon = _canonicalize(forests[0])
+
+    np.testing.assert_array_equal(canon["nodeIndex"], expected["nodeIndex"])
+    np.testing.assert_array_equal(canon["descendantIndex"], expected["descendantIndex"])
+    np.testing.assert_array_equal(canon["hostIndex"], expected["hostIndex"])
+    np.testing.assert_allclose(canon["expansionFactor"], expected["expansionFactor"])
+    np.testing.assert_allclose(canon["nodeMass"], expected["nodeMass"])
+    np.testing.assert_allclose(canon["position"], expected["position"], atol=1e-4)
+    np.testing.assert_allclose(canon["velocity"], expected["velocity"], atol=1e-4)
+
+
+def test_all_four_readers_agree_pairwise(tmp_path: Path) -> None:
+    """Every pair of readers produces Forests that match on canonical fields.
+
+    This is the explicit cross-reader contract: any drift introduced to
+    one reader without matching changes to the others will trip here.
+    """
+    canon_by_reader: dict[str, np.ndarray] = {}
+    for name, builder in _ALL_READER_BUILDERS.items():
+        # Each reader needs its own tmp subdirectory so fixture file
+        # names don't collide.
+        reader_tmp = tmp_path / name
+        reader_tmp.mkdir()
+        reader = builder(reader_tmp)
+        forests = list(reader)
+        assert len(forests) == 1, name
+        canon_by_reader[name] = _canonicalize(forests[0])
+
+    names = sorted(canon_by_reader)
+    reference = canon_by_reader[names[0]]
+    for other in names[1:]:
+        rhs = canon_by_reader[other]
+        for field in ("nodeIndex", "descendantIndex", "hostIndex"):
+            np.testing.assert_array_equal(
+                reference[field],
+                rhs[field],
+                err_msg=f"{names[0]} vs {other}: field {field!r}",
+            )
+        for field in ("expansionFactor", "nodeMass"):
+            np.testing.assert_allclose(
+                reference[field],
+                rhs[field],
+                err_msg=f"{names[0]} vs {other}: field {field!r}",
+            )
+        for field in ("position", "velocity"):
+            np.testing.assert_allclose(
+                reference[field],
+                rhs[field],
+                atol=1e-4,
+                err_msg=f"{names[0]} vs {other}: field {field!r}",
+            )

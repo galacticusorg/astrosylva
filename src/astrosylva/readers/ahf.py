@@ -31,8 +31,8 @@ widths raise.
 Units
 -----
 
-Standard AHF emits positions in Mpc/h and Rvir in kpc/h; both defaults
-match. Override either per build via ``options.units``:
+Standard AHF emits positions in Mpc/h, Rvir in kpc/h, and Mvir in
+M_sun/h; the defaults match. Override per build via ``options.units``:
 
 .. code-block:: yaml
 
@@ -40,10 +40,14 @@ match. Override either per build via ``options.units``:
      units:
        position: kpc/h   # default Mpc/h
        radius:   Mpc/h   # default kpc/h
+       mass:     Msun    # default Msun/h; requires options.hubble_h
+     hubble_h: 0.704     # only needed when units.mass = "Msun"
 
-Supported length units: ``Mpc/h``, ``kpc/h``. Mass (``Mvir``) is passed
-through as M_sun/h and velocity as km/s — those are unconditional in
-the AHF builds we've seen.
+Supported length units: ``Mpc/h``, ``kpc/h``. Supported mass units:
+``Msun/h`` (default), ``Msun`` (physical solar masses; the reader
+multiplies by ``options.hubble_h`` to land in canonical M_sun/h).
+Velocity is unconditional km/s — the AHF builds we've seen all agree
+on that.
 
 Status: experimental — column layout is auto-detected from the
 ``.AHF_halos`` header (``#name(1) name(2) ...``) and falls back to the
@@ -116,11 +120,16 @@ _LENGTH_UNIT_TO_MPCH: dict[str, float] = {
     "Mpc/h": 1.0,
 }
 
-# Per-quantity defaults. AHF's standard build emits positions in Mpc/h and
-# Rvir in kpc/h; override either via ``options.units``.
+# Mass units. ``Msun`` requires ``options.hubble_h`` since converting
+# physical M_sun back to M_sun/h needs multiplying by h.
+_MASS_UNITS = ("Msun/h", "Msun")
+
+# Per-quantity defaults. AHF's standard build emits positions in Mpc/h,
+# Rvir in kpc/h, and Mvir in M_sun/h; override any via ``options.units``.
 _DEFAULT_UNITS: dict[str, str] = {
     "position": "Mpc/h",
     "radius": "kpc/h",
+    "mass": "Msun/h",
 }
 
 
@@ -173,6 +182,35 @@ class AHFReader(TreeReader):
         self._radius_scale = _length_scale_factor(
             units.get("radius", _DEFAULT_UNITS["radius"]), key="units.radius"
         )
+        self._mass_scale = self._resolve_mass_scale(units.get("mass", _DEFAULT_UNITS["mass"]))
+
+    def _resolve_mass_scale(self, value: str) -> float:
+        """Multiplier that converts the source mass unit to canonical M_sun/h.
+
+        ``Msun/h`` passes through (factor 1.0). ``Msun`` requires
+        ``options.hubble_h`` so we can multiply by h.
+        """
+        if value not in _MASS_UNITS:
+            raise ReaderError(
+                f"Unknown mass unit {value!r} for units.mass; expected one of {list(_MASS_UNITS)}"
+            )
+        if value == "Msun/h":
+            return 1.0
+        # value == "Msun"
+        if "hubble_h" not in self.options:
+            raise ReaderError(
+                "options.units.mass='Msun' requires options.hubble_h "
+                "so the reader can convert M_sun -> M_sun/h."
+            )
+        try:
+            h = float(self.options["hubble_h"])
+        except (TypeError, ValueError) as exc:
+            raise ReaderError(
+                f"options.hubble_h must be a number; got {self.options['hubble_h']!r}"
+            ) from exc
+        if h <= 0:
+            raise ReaderError(f"options.hubble_h must be > 0; got {h}")
+        return h
 
     def metadata(self) -> Metadata:
         return Metadata(units=dict(DEFAULT_UNITS))
@@ -246,7 +284,7 @@ class AHFReader(TreeReader):
             halos["descendantIndex"][k] = -1
             halos["hostIndex"][k] = int(row[c["hostHalo"]])
             halos["expansionFactor"][k] = a
-            halos["nodeMass"][k] = float(row[c["Mvir"]])
+            halos["nodeMass"][k] = float(row[c["Mvir"]]) * self._mass_scale
             halos["scaleRadius"][k] = float(row[c["Rvir"]]) * self._radius_scale
             halos["halfMassRadius"][k] = np.nan  # AHF default output lacks half-mass radius
             halos["position"][k, 0] = float(row[c["Xc"]]) * self._position_scale

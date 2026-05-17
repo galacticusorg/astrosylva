@@ -11,6 +11,7 @@ from astrosylva.exceptions import ReaderError
 from astrosylva.readers import ReaderSource
 from astrosylva.readers.consistent_trees import (
     ConsistentTreesReader,
+    _parse_cosmology_header,
     _parse_header_columns,
 )
 
@@ -80,6 +81,33 @@ def test_reader_metadata_introspects_cosmology(ct_data_dir: Path) -> None:
     assert meta.cosmology["Omega0"] == pytest.approx(0.27)
     assert meta.cosmology["OmegaLambda"] == pytest.approx(0.73)
     assert meta.cosmology["HubbleParam"] == pytest.approx(0.7)
+
+
+def test_reader_parses_extended_cosmology_header() -> None:
+    """``Omega_b`` and ``sigma_8`` in the CT header propagate into metadata."""
+    cosmo = _parse_cosmology_header(
+        [
+            "#Omega_M = 0.27; Omega_L = 0.73; h = 0.7\n",
+            "#Omega_b = 0.046; sigma_8 = 0.81\n",
+        ]
+    )
+    assert cosmo == {
+        "Omega0": 0.27,
+        "OmegaLambda": 0.73,
+        "HubbleParam": 0.7,
+        "OmegaBaryon": 0.046,
+        "sigma_8": 0.81,
+    }
+
+
+def test_reader_cosmology_header_accepts_sigma8_variant_and_uppercase_b() -> None:
+    cosmo = _parse_cosmology_header(
+        [
+            "#sigma8 = 0.82\n",
+            "#Omega_B = 0.05\n",
+        ]
+    )
+    assert cosmo == {"sigma_8": 0.82, "OmegaBaryon": 0.05}
 
 
 def test_reader_rejects_bad_options(ct_data_dir: Path) -> None:

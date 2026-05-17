@@ -88,10 +88,27 @@ def _parse_header_columns(line: str) -> dict[str, int]:
 
 
 def _parse_cosmology_header(lines: list[str]) -> dict[str, float]:
-    """Extract ``Omega_M``, ``Omega_L``, ``h0`` from CT header comments."""
+    """Extract cosmological parameters from CT header comments.
+
+    Recognised tokens (case-insensitive variants accepted): ``Omega_M``,
+    ``Omega_L``, ``Omega_b`` / ``Omega_B``, ``h0`` / ``h``, ``sigma_8``
+    / ``sigma8``. Mapped to the Galacticus attribute names ``Omega0``,
+    ``OmegaLambda``, ``OmegaBaryon``, ``HubbleParam``, ``sigma_8``.
+    Anything we don't recognise is silently ignored; users can still
+    fill those gaps via ``metadata.cosmology``.
+    """
     out: dict[str, float] = {}
-    pattern = re.compile(r"(Omega_M|Omega_L|h0)\s*=\s*([0-9.eE+-]+)")
-    key_map = {"Omega_M": "Omega0", "Omega_L": "OmegaLambda", "h0": "HubbleParam"}
+    pattern = re.compile(r"\b(Omega_M|Omega_L|Omega_[bB]|h0|h|sigma_?8)\s*=\s*([0-9.eE+-]+)")
+    key_map = {
+        "Omega_M": "Omega0",
+        "Omega_L": "OmegaLambda",
+        "Omega_b": "OmegaBaryon",
+        "Omega_B": "OmegaBaryon",
+        "h0": "HubbleParam",
+        "h": "HubbleParam",
+        "sigma_8": "sigma_8",
+        "sigma8": "sigma_8",
+    }
     for line in lines:
         for key, value in pattern.findall(line):
             out[key_map[key]] = float(value)

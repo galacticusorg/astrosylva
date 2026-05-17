@@ -377,3 +377,68 @@ def test_units_non_mapping_raises() -> None:
             ReaderSource({"snapshots": []}),
             options={"units": "Mpc/h"},
         )
+
+
+def test_default_mass_is_msun_per_h_no_conversion(
+    ahf_two_independent_forests: list[dict[str, object]],
+) -> None:
+    """Default ``units.mass = 'Msun/h'`` passes the raw value through."""
+    reader = AHFReader(ReaderSource({"snapshots": ahf_two_independent_forests}))
+    by_id_mass: dict[int, float] = {
+        int(h["nodeIndex"]): float(h["nodeMass"]) for forest in reader for h in forest.halos
+    }
+    # Fixture writes Mvir=2e12 for halo 100 (already Msun/h).
+    assert by_id_mass[100] == 2e12
+
+
+def test_mass_units_msun_requires_hubble_h(
+    ahf_two_independent_forests: list[dict[str, object]],
+) -> None:
+    with pytest.raises(ReaderError, match=r"requires options\.hubble_h"):
+        AHFReader(
+            ReaderSource({"snapshots": ahf_two_independent_forests}),
+            options={"units": {"mass": "Msun"}},
+        )
+
+
+def test_mass_units_msun_with_hubble_h_multiplies(
+    ahf_two_independent_forests: list[dict[str, object]],
+) -> None:
+    """``Msun`` input multiplied by h yields canonical M_sun/h."""
+    reader = AHFReader(
+        ReaderSource({"snapshots": ahf_two_independent_forests}),
+        options={"units": {"mass": "Msun"}, "hubble_h": 0.7},
+    )
+    by_id_mass: dict[int, float] = {
+        int(h["nodeIndex"]): float(h["nodeMass"]) for forest in reader for h in forest.halos
+    }
+    # Fixture writes Mvir=2e12 (in physical Msun in this run); reader * h.
+    assert by_id_mass[100] == 2e12 * 0.7
+
+
+def test_mass_units_unknown_value_raises() -> None:
+    with pytest.raises(ReaderError, match=r"Unknown mass unit"):
+        AHFReader(
+            ReaderSource({"snapshots": []}),
+            options={"units": {"mass": "kilograms"}, "hubble_h": 0.7},
+        )
+
+
+def test_hubble_h_non_numeric_raises(
+    ahf_two_independent_forests: list[dict[str, object]],
+) -> None:
+    with pytest.raises(ReaderError, match=r"options\.hubble_h must be a number"):
+        AHFReader(
+            ReaderSource({"snapshots": ahf_two_independent_forests}),
+            options={"units": {"mass": "Msun"}, "hubble_h": "seven-tenths"},
+        )
+
+
+def test_hubble_h_non_positive_raises(
+    ahf_two_independent_forests: list[dict[str, object]],
+) -> None:
+    with pytest.raises(ReaderError, match=r"options\.hubble_h must be > 0"):
+        AHFReader(
+            ReaderSource({"snapshots": ahf_two_independent_forests}),
+            options={"units": {"mass": "Msun"}, "hubble_h": 0.0},
+        )
