@@ -1,15 +1,32 @@
 """AHF (Amiga Halo Finder) reader.
 
-AHF emits one ``.AHF_halos`` catalogue per snapshot plus ``.AHF_mtree`` files
-linking halos across snapshots. To produce merger trees in Galacticus format
-we walk pairs of snapshots, stitch descendant pointers, and partition the
-resulting halo set into forests via union-find on descendant + host edges.
+AHF emits one ``.AHF_halos`` catalogue per snapshot plus ``.AHF_mtree``
+(or ``.AHF_mtree_idx``) files linking halos across snapshots. To produce
+merger trees in Galacticus format we walk pairs of snapshots, stitch
+descendant pointers, and partition the resulting halo set into forests
+via union-find on descendant + host edges.
 
 Source keys
 -----------
 
 - ``snapshots`` : list of ``{halos: path, mtree: path | null, a: float}``
   ordered from earliest to latest. The last snapshot has ``mtree: null``.
+
+mtree formats
+-------------
+
+Two AHF mtree variants are recognised:
+
+- ``idx``   — two columns per line: ``ProgID DescID``  (the
+              ``.AHF_mtree_idx`` format).
+- ``block`` — blocks of ``DescID HaloPart NumProgenitors`` followed by
+              ``NumProgenitors`` lines of ``SharedPart ProgID HaloPart``
+              (the standard ``.AHF_mtree`` format).
+
+``options.mtree_format`` selects ``"auto"`` (default), ``"idx"``, or
+``"block"``. Auto-detect picks ``idx`` when every record is two
+tokens wide and ``block`` when every record is at least three; mixed
+widths raise.
 
 Status: experimental — handles the common AHF column layout (ID, hostHalo,
 Mvir, Rvir, Xc, Yc, Zc, VXc, VYc, VZc, Lx, Ly, Lz, lambda). Adjust
@@ -50,11 +67,22 @@ _AHF_COLUMNS = {
 }
 
 
+_VALID_MTREE_FORMATS = ("auto", "idx", "block")
+
+
 class AHFReader(TreeReader):
     """Reader for AHF halo catalogues + merger-tree files."""
 
     name: ClassVar[str] = "ahf"
     aliases: ClassVar[tuple[str, ...]] = ("amiga",)
+
+    def __init__(self, source: Any, options: dict[str, Any] | None = None) -> None:
+        super().__init__(source, options)
+        self._mtree_format: str = self.options.get("mtree_format", "auto")
+        if self._mtree_format not in _VALID_MTREE_FORMATS:
+            raise ReaderError(
+                f"mtree_format must be one of 'auto', 'idx', 'block'; got {self._mtree_format!r}"
+            )
 
     def metadata(self) -> Metadata:
         return Metadata(units=dict(DEFAULT_UNITS))
@@ -84,7 +112,7 @@ class AHFReader(TreeReader):
             mtree_path = snap.get("mtree")
             if mtree_path is None:
                 continue
-            self._apply_mtree(Path(mtree_path), per_snap[i], per_snap[i + 1])
+            self._apply_mtree(Path(mtree_path), per_snap[i])
         if not per_snap:
             self._forests = []
             return
@@ -144,29 +172,111 @@ class AHFReader(TreeReader):
         halos["hostIndex"][no_host] = halos["nodeIndex"][no_host]
         return halos
 
-    @staticmethod
-    def _apply_mtree(
-        path: Path,
-        current: np.ndarray,
-        descendants: np.ndarray,  # noqa: ARG004  reserved for future cross-validation
-    ) -> None:
+    def _apply_mtree(self, path: Path, current: np.ndarray) -> None:
         if not path.is_file():
             raise ReaderError(f"AHF mtree file not found: {path}")
-        # AHF .AHF_mtree format: blocks of
-        #   HaloID(at this snap)   #shared_particles   DescendantID(at next snap)   ...
-        # followed by per-progenitor lines we don't need here.
+        records = _read_mtree_records(path)
+        if not records:
+            return
+        fmt = self._resolve_mtree_format(records, path)
         id_to_idx = {int(h): i for i, h in enumerate(current["nodeIndex"])}
-        with path.open() as fh:
-            for raw in fh:
-                stripped = raw.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                parts = stripped.split()
-                if len(parts) < 3:
-                    continue
-                halo_id = int(parts[0])
-                desc_id = int(parts[2])
-                idx = id_to_idx.get(halo_id)
-                if idx is None:
-                    continue
+        if fmt == "idx":
+            _apply_mtree_idx(records, id_to_idx, current, path)
+        else:
+            _apply_mtree_block(records, id_to_idx, current, path)
+
+    def _resolve_mtree_format(self, records: list[list[str]], path: Path) -> str:
+        if self._mtree_format != "auto":
+            return self._mtree_format
+        widths = {len(r) for r in records}
+        if widths == {2}:
+            return "idx"
+        if min(widths) >= 3:
+            return "block"
+        raise ReaderError(
+            f"AHF mtree at {path} has inconsistent record widths {sorted(widths)}; "
+            "set options.mtree_format explicitly ('idx' or 'block')."
+        )
+
+
+def _read_mtree_records(path: Path) -> list[list[str]]:
+    out: list[list[str]] = []
+    with path.open() as fh:
+        for raw in fh:
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            out.append(stripped.split())
+    return out
+
+
+def _apply_mtree_idx(
+    records: list[list[str]],
+    id_to_idx: dict[int, int],
+    current: np.ndarray,
+    path: Path,
+) -> None:
+    """Apply ``ProgID DescID`` pairs from an .AHF_mtree_idx-style file."""
+    for parts in records:
+        if len(parts) != 2:
+            raise ReaderError(
+                f"AHF idx-format mtree expected 2 fields per line, got {parts!r} in {path}"
+            )
+        try:
+            prog_id, desc_id = int(parts[0]), int(parts[1])
+        except ValueError as exc:
+            raise ReaderError(f"Non-integer field in {path}: {parts!r}") from exc
+        idx = id_to_idx.get(prog_id)
+        if idx is not None:
+            current["descendantIndex"][idx] = desc_id
+
+
+def _apply_mtree_block(
+    records: list[list[str]],
+    id_to_idx: dict[int, int],
+    current: np.ndarray,
+    path: Path,
+) -> None:
+    """Apply descendant pointers from a block-format ``.AHF_mtree``.
+
+    Each block is a 3-field header ``DescID HaloPart NumProgenitors``
+    followed by ``NumProgenitors`` 3-field progenitor lines
+    ``SharedPart ProgID HaloPart``.
+    """
+    i = 0
+    while i < len(records):
+        header = records[i]
+        if len(header) < 3:
+            raise ReaderError(
+                f"AHF block-format mtree header expects >=3 fields: {header!r} in {path}"
+            )
+        try:
+            desc_id = int(header[0])
+            n_prog = int(header[2])
+        except ValueError as exc:
+            raise ReaderError(
+                f"AHF block-format mtree header not parseable: {header!r} in {path}"
+            ) from exc
+        if n_prog < 0:
+            raise ReaderError(
+                f"AHF block-format mtree NumProgenitors negative: {header!r} in {path}"
+            )
+        i += 1
+        for _ in range(n_prog):
+            if i >= len(records):
+                raise ReaderError(
+                    f"Truncated AHF block-format mtree near descendant {desc_id} in {path}"
+                )
+            prog_line = records[i]
+            if len(prog_line) < 2:
+                raise ReaderError(
+                    f"AHF block-format progenitor line expects >=2 fields: {prog_line!r} in {path}"
+                )
+            try:
+                prog_id = int(prog_line[1])
+            except ValueError as exc:
+                raise ReaderError(f"Non-integer progenitor ID in {path}: {prog_line!r}") from exc
+            idx = id_to_idx.get(prog_id)
+            if idx is not None:
                 current["descendantIndex"][idx] = desc_id
+            i += 1

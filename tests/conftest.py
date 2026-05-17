@@ -504,9 +504,8 @@ def ahf_two_independent_forests(tmp_path: Path) -> list[dict[str, object]]:
         + _ahf_halo_row(101, 100, mvir=2e11, pos=(5.1, 5.1, 5.1))
         + _ahf_halo_row(200, 0, mvir=1.5e12, pos=(10.0, 10.0, 10.0))
     )
-    snap0_mtree.write_text(
-        "# halo_id n_shared desc_id\n1100 1000 100\n1101 200 101\n1200 800 200\n"
-    )
+    # .AHF_mtree_idx format: one ProgID DescID pair per line.
+    snap0_mtree.write_text("# ProgID DescID\n1100 100\n1101 101\n1200 200\n")
     return [
         {"halos": str(snap0), "mtree": str(snap0_mtree), "a": 0.5},
         {"halos": str(snap1), "mtree": None, "a": 1.0},
@@ -524,3 +523,87 @@ def ahf_single_snapshot(tmp_path: Path) -> list[dict[str, object]]:
         + _ahf_halo_row(300, 0, mvir=1e12, pos=(15.0, 15.0, 15.0))
     )
     return [{"halos": str(snap), "mtree": None, "a": 1.0}]
+
+
+@pytest.fixture
+def ahf_block_format_mtree(tmp_path: Path) -> list[dict[str, object]]:
+    """Two snapshots where the mtree uses the block .AHF_mtree format.
+
+    Same halo topology as ahf_two_independent_forests but the mtree is
+    written in the descendant-first block format::
+
+        DescID  HaloPart  NumProgenitors
+            SharedPart  ProgID  HaloPart
+            ...
+
+    Block 1 (DescID=100): one progenitor 1100.
+    Block 2 (DescID=101): one progenitor 1101.
+    Block 3 (DescID=200): one progenitor 1200.
+    """
+    snap0 = tmp_path / "snap_00.AHF_halos"
+    snap0_mtree = tmp_path / "snap_00.AHF_mtree"
+    snap1 = tmp_path / "snap_01.AHF_halos"
+    snap0.write_text(
+        "# AHF halos header\n"
+        + _ahf_halo_row(1100, 0, mvir=1e12, pos=(5.0, 5.0, 5.0))
+        + _ahf_halo_row(1101, 1100, mvir=1e11, pos=(5.1, 5.1, 5.1))
+        + _ahf_halo_row(1200, 0, mvir=8e11, pos=(10.0, 10.0, 10.0))
+    )
+    snap1.write_text(
+        "# AHF halos header\n"
+        + _ahf_halo_row(100, 0, mvir=2e12, pos=(5.0, 5.0, 5.0))
+        + _ahf_halo_row(101, 100, mvir=2e11, pos=(5.1, 5.1, 5.1))
+        + _ahf_halo_row(200, 0, mvir=1.5e12, pos=(10.0, 10.0, 10.0))
+    )
+    snap0_mtree.write_text(
+        "#DescID HaloPart NumProgenitors\n"
+        "#  SharedPart ProgID HaloPart\n"
+        "100 2000 1\n"
+        "        1000 1100 1000\n"
+        "101 200 1\n"
+        "        150 1101 200\n"
+        "200 1500 1\n"
+        "        800 1200 800\n"
+    )
+    return [
+        {"halos": str(snap0), "mtree": str(snap0_mtree), "a": 0.5},
+        {"halos": str(snap1), "mtree": None, "a": 1.0},
+    ]
+
+
+@pytest.fixture
+def ahf_block_format_multiple_progenitors(tmp_path: Path) -> list[dict[str, object]]:
+    """Block-format mtree where one descendant has TWO progenitors (merger)."""
+    snap0 = tmp_path / "snap_00.AHF_halos"
+    snap0_mtree = tmp_path / "snap_00.AHF_mtree"
+    snap1 = tmp_path / "snap_01.AHF_halos"
+    snap0.write_text(
+        "# AHF halos header\n"
+        + _ahf_halo_row(1100, 0, mvir=1e12, pos=(5.0, 5.0, 5.0))
+        + _ahf_halo_row(1101, 0, mvir=8e11, pos=(5.0, 5.0, 5.0))  # second prog
+    )
+    snap1.write_text("# AHF halos header\n" + _ahf_halo_row(100, 0, mvir=2e12, pos=(5.0, 5.0, 5.0)))
+    # Both 1100 and 1101 are progenitors of 100 (a merger).
+    snap0_mtree.write_text("100 3000 2\n    1000 1100 1000\n     800 1101 800\n")
+    return [
+        {"halos": str(snap0), "mtree": str(snap0_mtree), "a": 0.5},
+        {"halos": str(snap1), "mtree": None, "a": 1.0},
+    ]
+
+
+@pytest.fixture
+def ahf_mixed_width_mtree(tmp_path: Path) -> list[dict[str, object]]:
+    """Snapshot pair whose mtree has both 2-col and 3-col lines — auto-detect
+    should refuse to guess and raise."""
+    snap0 = tmp_path / "snap_00.AHF_halos"
+    snap0_mtree = tmp_path / "snap_00.AHF_mtree"
+    snap1 = tmp_path / "snap_01.AHF_halos"
+    snap0.write_text(
+        "# AHF halos header\n" + _ahf_halo_row(1100, 0, mvir=1e12, pos=(5.0, 5.0, 5.0))
+    )
+    snap1.write_text("# AHF halos header\n" + _ahf_halo_row(100, 0, mvir=2e12, pos=(5.0, 5.0, 5.0)))
+    snap0_mtree.write_text("1100 100\n100 1000 0\n")
+    return [
+        {"halos": str(snap0), "mtree": str(snap0_mtree), "a": 0.5},
+        {"halos": str(snap1), "mtree": None, "a": 1.0},
+    ]
