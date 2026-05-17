@@ -202,6 +202,23 @@ class ConsistentTreesReader(TreeReader):
             simulation=sim,
         )
 
+    def defaults(self) -> Metadata:
+        """The four /forestHalos flags the legacy C tool always emitted.
+
+        These match the values in the original parameter.cfg shipped with
+        rockstar2galacticus. They're true for any standard Rockstar /
+        Consistent-Trees run; users with different conventions can
+        override per-key via ``metadata.haloTrees`` in their YAML.
+        """
+        return Metadata(
+            halo_trees={
+                "haloMassesIncludeSubhalos": 1,
+                "forestsAreSelfContained": 1,
+                "treesHaveSubhalos": 1,
+                "velocitiesIncludeHubbleFlow": 0,
+            }
+        )
+
     def __len__(self) -> int:
         self._ensure_indexed()
         assert self._forest_index is not None

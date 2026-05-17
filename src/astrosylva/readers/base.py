@@ -53,6 +53,20 @@ class TreeReader(ABC):
     def metadata(self) -> Metadata:
         """Return whatever metadata the reader can introspect from its input."""
 
+    def defaults(self) -> Metadata:
+        """Reader-supplied default metadata.
+
+        Unlike :meth:`metadata`, these values are *not* introspected from
+        the input data — they're per-format conventions that fill in a
+        Galacticus output's optional attributes when the user hasn't
+        spelled them out in their YAML. Config values silently override
+        defaults; introspected values warn on conflict with config.
+
+        Subclasses override this to ship their format's defaults; the
+        base implementation returns an empty :class:`Metadata`.
+        """
+        return Metadata()
+
     @abstractmethod
     def __iter__(self) -> Iterator[Forest]:
         """Yield :class:`Forest` objects in any order."""

@@ -65,6 +65,7 @@ def _run_conversion(cfg: Config) -> None:
     reader = reader_cls(ReaderSource(cfg.reader.source), cfg.reader.options)
 
     reader_meta = reader.metadata()
+    reader_defaults = reader.defaults()
     config_meta = Metadata(
         cosmology=dict(cfg.metadata.cosmology),
         units=dict(cfg.metadata.units),
@@ -72,7 +73,7 @@ def _run_conversion(cfg: Config) -> None:
         group_finder=dict(cfg.metadata.group_finder),
         simulation=dict(cfg.metadata.simulation),
     )
-    merged = _merge_metadata(reader_meta, config_meta)
+    merged = _merge_metadata(reader_meta, config_meta, reader_defaults)
 
     cfg.writer.output_path.parent.mkdir(parents=True, exist_ok=True)
     total = len(reader)
@@ -85,8 +86,22 @@ def _run_conversion(cfg: Config) -> None:
     click.echo("done.")
 
 
-def _merge_metadata(reader_meta: Metadata, config_meta: Metadata) -> Metadata:
-    """Merge config and reader metadata. Reader wins on conflict; warn."""
+def _merge_metadata(
+    reader_meta: Metadata,
+    config_meta: Metadata,
+    reader_defaults: Metadata | None = None,
+) -> Metadata:
+    """Merge reader defaults, config, and reader-introspected metadata.
+
+    Precedence (lowest first): reader defaults, config, reader
+    introspected. Defaults are silent — config overrides them without
+    a warning. Introspected values from the reader (e.g. cosmology
+    parsed from a CT header) override config but emit a
+    :class:`MetadataConflictWarning` if they disagree, since the data
+    is authoritative.
+    """
+    if reader_defaults is None:
+        reader_defaults = Metadata()
     out = Metadata(format_version=reader_meta.format_version or config_meta.format_version)
     for field_name in (
         "cosmology",
@@ -95,9 +110,11 @@ def _merge_metadata(reader_meta: Metadata, config_meta: Metadata) -> Metadata:
         "group_finder",
         "simulation",
     ):
+        defaults_dict: dict[str, Any] = dict(getattr(reader_defaults, field_name))
         config_dict: dict[str, Any] = dict(getattr(config_meta, field_name))
         reader_dict: dict[str, Any] = dict(getattr(reader_meta, field_name))
-        merged: dict[str, Any] = dict(config_dict)
+        merged: dict[str, Any] = dict(defaults_dict)
+        merged.update(config_dict)
         for key, reader_val in reader_dict.items():
             if key in config_dict and config_dict[key] != reader_val:
                 warnings.warn(
