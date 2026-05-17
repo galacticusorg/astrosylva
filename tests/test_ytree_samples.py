@@ -86,11 +86,20 @@ def test_ytree_lhalotree_sample() -> None:
     chunks = sorted(sample_dir.glob("trees_*.*"))
     if not chunks:
         pytest.skip(f"no trees_*.* files in {sample_dir}")
-    snap_table = sample_dir / "snap_a.txt"
-    if not snap_table.is_file():
+    # The Millennium-style sample ships an `a_list.txt` (one scale factor
+    # per line, snap inferred from the line index). Some builds may also
+    # ship a 2-column `snap_a.txt` mapping; try both.
+    snap_table_candidates = ["a_list.txt", "snap_a.txt", "millennium.a_list"]
+    snap_table: Path | None = None
+    for name in snap_table_candidates:
+        candidate = sample_dir / name
+        if candidate.is_file():
+            snap_table = candidate
+            break
+    if snap_table is None:
         pytest.skip(
-            f"ytree LHaloTree sample at {sample_dir} needs a snap_a.txt "
-            "(snap_num scale_factor per line) to look up expansion factors."
+            f"ytree LHaloTree sample at {sample_dir} needs a snapshot table "
+            f"({snap_table_candidates}) to look up expansion factors."
         )
     reader = LHaloTreeReader(
         ReaderSource(

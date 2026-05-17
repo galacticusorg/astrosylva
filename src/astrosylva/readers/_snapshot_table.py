@@ -20,29 +20,82 @@ from astrosylva.readers.base import ReaderSource
 
 
 def _read_snap_table_file(path: Path, quantity: str) -> dict[int, float]:
+    """Parse a snapshot-table text file in one of two auto-detected shapes:
+
+    - **2-column** (``snap_num value``) — each row is a ``snap`` and a
+      scale factor or redshift.
+    - **1-column** (``value`` per line) — the snap number is the
+      0-based line index. This is the Millennium / L-Galaxies
+      ``a_list`` convention.
+
+    Auto-detection picks 1-column when every record has a single
+    token, 2-column when every record has at least two; mixed widths
+    raise.
+
+    ``quantity`` selects whether the right-hand value is a scale
+    factor (passed through) or a redshift (converted to ``a =
+    1/(1+z)``).
+    """
     if quantity not in ("scale_factor", "redshift"):
         raise ReaderError(
             f"snapshot_table_quantity must be 'scale_factor' or 'redshift', got {quantity!r}"
         )
     if not path.is_file():
         raise ReaderError(f"snapshot table file not found: {path}")
-    out: dict[int, float] = {}
-    with path.open() as fh:
-        for raw in fh:
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            try:
-                snap = int(parts[0])
-            except ValueError:
-                continue  # header line
-            value = float(parts[1])
-            out[snap] = value if quantity == "scale_factor" else 1.0 / (1.0 + value)
+    records = _load_snap_table_records(path)
+    widths = {len(r) for r in records}
+    if widths == {1}:
+        out = _parse_snap_table_alist(records, path, quantity)
+    elif min(widths) >= 2:
+        out = _parse_snap_table_snap_keyed(records, quantity)
+    else:
+        raise ReaderError(
+            f"snapshot table {path} has inconsistent row widths {sorted(widths)}; "
+            "expected either 1 column (snap inferred from line index) or >=2."
+        )
     if not out:
         raise ReaderError(f"snapshot table {path} contained no usable rows")
+    return out
+
+
+def _load_snap_table_records(path: Path) -> list[list[str]]:
+    records: list[list[str]] = []
+    with path.open() as fh:
+        for raw in fh:
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            records.append(stripped.split())
+    if not records:
+        raise ReaderError(f"snapshot table {path} contained no usable rows")
+    return records
+
+
+def _parse_snap_table_alist(
+    records: list[list[str]], path: Path, quantity: str
+) -> dict[int, float]:
+    out: dict[int, float] = {}
+    for snap, parts in enumerate(records):
+        try:
+            value = float(parts[0])
+        except ValueError as exc:
+            raise ReaderError(
+                f"snapshot table {path} (a-list format) has non-numeric "
+                f"value at line {snap}: {parts[0]!r}"
+            ) from exc
+        out[snap] = value if quantity == "scale_factor" else 1.0 / (1.0 + value)
+    return out
+
+
+def _parse_snap_table_snap_keyed(records: list[list[str]], quantity: str) -> dict[int, float]:
+    out: dict[int, float] = {}
+    for parts in records:
+        try:
+            snap = int(parts[0])
+        except ValueError:
+            continue  # header line
+        value = float(parts[1])
+        out[snap] = value if quantity == "scale_factor" else 1.0 / (1.0 + value)
     return out
 
 

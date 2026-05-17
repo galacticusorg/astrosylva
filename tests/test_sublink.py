@@ -64,6 +64,27 @@ def test_sublink_scale_factors_from_file(sublink_tree_file: Path, tmp_path: Path
     np.testing.assert_allclose(forest.halos["expansionFactor"], [1.0, 0.5, 0.05])
 
 
+def test_sublink_scale_factors_from_a_list_file(sublink_tree_file: Path, tmp_path: Path) -> None:
+    """The Millennium-style 1-column ``a_list`` format is auto-detected:
+    snap number is the 0-based line index."""
+    table = tmp_path / "a_list.txt"
+    table.write_text("0.05\n0.5\n1.0\n")  # snap 0 -> 0.05, snap 1 -> 0.5, snap 2 -> 1.0
+    reader = SubLinkReader(_source(sublink_tree_file, snapshot_table=str(table)))
+    forest = next(iter(reader))
+    # Halos appear in snap order [2, 1, 0] in the fixture, so a = [1.0, 0.5, 0.05].
+    np.testing.assert_allclose(forest.halos["expansionFactor"], [1.0, 0.5, 0.05])
+
+
+def test_sublink_snapshot_table_rejects_mixed_widths(
+    sublink_tree_file: Path, tmp_path: Path
+) -> None:
+    """A file with inconsistent column widths raises a clear error."""
+    table = tmp_path / "bad.txt"
+    table.write_text("0.05\n1 0.5\n")  # one 1-token, one 2-token row
+    with pytest.raises(ReaderError, match="inconsistent row widths"):
+        SubLinkReader(_source(sublink_tree_file, snapshot_table=str(table)))
+
+
 def test_sublink_redshift_table_quantity(sublink_tree_file: Path, tmp_path: Path) -> None:
     table = tmp_path / "snaps_z.txt"
     table.write_text("0 19.0\n1 1.0\n2 0.0\n")
