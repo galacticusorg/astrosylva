@@ -607,3 +607,47 @@ def ahf_mixed_width_mtree(tmp_path: Path) -> list[dict[str, object]]:
         {"halos": str(snap0), "mtree": str(snap0_mtree), "a": 0.5},
         {"halos": str(snap1), "mtree": None, "a": 1.0},
     ]
+
+
+@pytest.fixture
+def ahf_with_real_header(tmp_path: Path) -> list[dict[str, object]]:
+    """AHF halos written with a proper ``#name(N) ...`` header and a
+    compact 14-column layout — different from the hardcoded defaults.
+
+    Column order: ID hostHalo Mvir Rvir Xc Yc Zc VXc VYc VZc lambda Lx Ly Lz
+    (1-based positions in the AHF header).
+    """
+    snap = tmp_path / "snap_01.AHF_halos"
+    snap.write_text(
+        "#ID(1) hostHalo(2) Mvir(3) Rvir(4) Xc(5) Yc(6) Zc(7) "
+        "VXc(8) VYc(9) VZc(10) lambda(11) Lx(12) Ly(13) Lz(14)\n"
+        # 100: central
+        "100 0 2e12 200 5.0 5.0 5.0 100 0 0 0.05 1e10 1e10 1e10\n"
+        # 101: satellite of 100
+        "101 100 2e11 100 5.1 5.1 5.1 110 0 0 0.04 1e9 1e9 1e9\n"
+    )
+    return [{"halos": str(snap), "mtree": None, "a": 1.0}]
+
+
+@pytest.fixture
+def ahf_with_renamed_column(tmp_path: Path) -> list[dict[str, object]]:
+    """Same compact layout as the real-header fixture but with ``Spin``
+    instead of ``lambda``. Auto-detect picks up ``Spin``, so the user
+    has to remap it via ``options.columns``.
+    """
+    snap = tmp_path / "snap_01.AHF_halos"
+    snap.write_text(
+        "#ID(1) hostHalo(2) Mvir(3) Rvir(4) Xc(5) Yc(6) Zc(7) "
+        "VXc(8) VYc(9) VZc(10) Spin(11) Lx(12) Ly(13) Lz(14)\n"
+        "100 0 2e12 200 5.0 5.0 5.0 100 0 0 0.07 1e10 1e10 1e10\n"
+    )
+    return [{"halos": str(snap), "mtree": None, "a": 1.0}]
+
+
+@pytest.fixture
+def ahf_with_too_few_columns(tmp_path: Path) -> list[dict[str, object]]:
+    """File with no header and fewer than the default mapping requires."""
+    snap = tmp_path / "snap_01.AHF_halos"
+    # Only 5 columns; defaults reach all the way to index 23.
+    snap.write_text("100 0 1e12 50 5.0\n")
+    return [{"halos": str(snap), "mtree": None, "a": 1.0}]

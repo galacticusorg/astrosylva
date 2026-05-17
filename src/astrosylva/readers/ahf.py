@@ -28,14 +28,16 @@ Two AHF mtree variants are recognised:
 tokens wide and ``block`` when every record is at least three; mixed
 widths raise.
 
-Status: experimental — handles the common AHF column layout (ID, hostHalo,
-Mvir, Rvir, Xc, Yc, Zc, VXc, VYc, VZc, Lx, Ly, Lz, lambda). Adjust
-``_AHF_COLUMNS`` if your build emits a different schema. Halo IDs are
-expected to be globally unique across snapshots (standard AHF behaviour).
+Status: experimental — column layout is auto-detected from the
+``.AHF_halos`` header (``#name(1) name(2) ...``) and falls back to the
+defaults below when the file has no recognisable header. Override
+individual columns via ``options.columns``. Halo IDs are expected to be
+globally unique across snapshots (standard AHF behaviour).
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, ClassVar
@@ -47,9 +49,10 @@ from astrosylva.readers._forests import clamp_hosts_to_forest, group_by_union_fi
 from astrosylva.readers.base import TreeReader
 from astrosylva.schema import DEFAULT_UNITS, HALO_DTYPE, Forest, Metadata
 
-# 1-indexed positions of the columns we use in standard AHF .AHF_halos output.
-# (AHF column order is configurable per build; users may need to override.)
-_AHF_COLUMNS = {
+# 0-based positions of the columns we use in a common AHF .AHF_halos layout.
+# Real AHF builds vary, so this is only a fallback — auto-detected header
+# values and ``options.columns`` overrides take precedence.
+_AHF_DEFAULT_COLUMNS: dict[str, int] = {
     "ID": 0,
     "hostHalo": 1,
     "Mvir": 3,
@@ -65,6 +68,27 @@ _AHF_COLUMNS = {
     "Lz": 23,
     "lambda": 20,
 }
+_AHF_REQUIRED_COLUMNS = frozenset(_AHF_DEFAULT_COLUMNS)
+
+_AHF_HEADER_TOKEN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\((\d+)\)")
+
+
+def _parse_ahf_header(line: str) -> dict[str, int]:
+    """Parse ``#name(1) other(2) ...`` into a ``{name: 0-based-index}`` map.
+
+    Tokens that don't match the ``name(N)`` shape (e.g. annotated with
+    units like ``Mvir(4)[Msun/h]``) are silently skipped — the user can
+    fill those gaps with ``options.columns``.
+    """
+    out: dict[int, str] = {}
+    tokens = line.lstrip("#").split()
+    for tok in tokens:
+        m = _AHF_HEADER_TOKEN.match(tok)
+        if m is None:
+            continue
+        pos = int(m.group(2)) - 1  # AHF headers are 1-based
+        out[pos] = m.group(1)
+    return {name: pos for pos, name in out.items()}
 
 
 _VALID_MTREE_FORMATS = ("auto", "idx", "block")
@@ -83,6 +107,16 @@ class AHFReader(TreeReader):
             raise ReaderError(
                 f"mtree_format must be one of 'auto', 'idx', 'block'; got {self._mtree_format!r}"
             )
+        overrides = self.options.get("columns", {}) or {}
+        if not isinstance(overrides, dict):
+            raise ReaderError(
+                "options.columns must be a mapping of column-name to 0-based index; "
+                f"got {type(overrides).__name__}"
+            )
+        try:
+            self._column_overrides: dict[str, int] = {str(k): int(v) for k, v in overrides.items()}
+        except (TypeError, ValueError) as exc:
+            raise ReaderError("options.columns values must be integer column indices") from exc
 
     def metadata(self) -> Metadata:
         return Metadata(units=dict(DEFAULT_UNITS))
@@ -135,21 +169,23 @@ class AHFReader(TreeReader):
             forests.append(Forest(forest_id=forest_id, halos=forest_halos))
         self._forests = forests
 
-    @staticmethod
-    def _load_halo_catalogue(path: Path, a: float) -> np.ndarray:
+    def _load_halo_catalogue(self, path: Path, a: float) -> np.ndarray:
         if not path.is_file():
             raise ReaderError(f"AHF halos file not found: {path}")
-        rows: list[list[str]] = []
-        with path.open() as fh:
-            for raw in fh:
-                stripped = raw.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                rows.append(stripped.split())
+        header_columns, rows = _read_ahf_halos_file(path)
+        row_width = len(rows[0]) if rows else 0
+        column_map = self._resolve_columns(header_columns, path, row_width)
+        max_index = max(column_map.values()) if column_map else -1
+
         n = len(rows)
         halos = np.empty(n, dtype=HALO_DTYPE)
-        c = _AHF_COLUMNS
+        c = column_map
         for k, row in enumerate(rows):
+            if len(row) <= max_index:
+                raise ReaderError(
+                    f"AHF row {k} in {path} has {len(row)} fields but column "
+                    f"layout needs at least {max_index + 1}."
+                )
             halos["nodeIndex"][k] = int(row[c["ID"]])
             halos["descendantIndex"][k] = -1
             halos["hostIndex"][k] = int(row[c["hostHalo"]])
@@ -171,6 +207,32 @@ class AHFReader(TreeReader):
         no_host = halos["hostIndex"] == 0
         halos["hostIndex"][no_host] = halos["nodeIndex"][no_host]
         return halos
+
+    def _resolve_columns(
+        self,
+        header_columns: dict[str, int],
+        path: Path,
+        row_width: int,
+    ) -> dict[str, int]:
+        """Merge defaults, header-detected, and user-supplied column maps.
+
+        Precedence (lowest → highest): defaults → header → user overrides.
+        Any entry pointing past the file's actual row width is treated as
+        absent (the default may be a phantom that the user's build doesn't
+        actually emit). Raises if any required column is still missing.
+        """
+        column_map: dict[str, int] = dict(_AHF_DEFAULT_COLUMNS)
+        column_map.update(header_columns)
+        column_map.update(self._column_overrides)
+        if row_width > 0:
+            column_map = {name: idx for name, idx in column_map.items() if idx < row_width}
+        missing = sorted(_AHF_REQUIRED_COLUMNS - column_map.keys())
+        if missing:
+            raise ReaderError(
+                f"AHF file {path} is missing required columns {missing}; "
+                "supply them via options.columns."
+            )
+        return column_map
 
     def _apply_mtree(self, path: Path, current: np.ndarray) -> None:
         if not path.is_file():
@@ -197,6 +259,27 @@ class AHFReader(TreeReader):
             f"AHF mtree at {path} has inconsistent record widths {sorted(widths)}; "
             "set options.mtree_format explicitly ('idx' or 'block')."
         )
+
+
+def _read_ahf_halos_file(path: Path) -> tuple[dict[str, int], list[list[str]]]:
+    """Parse the column header (from any ``#name(N) ...`` line) and rows.
+
+    Returns ``({name: 0-based-index}, rows)``. Header tokens accumulate
+    across multiple comment lines — useful for AHF outputs that wrap the
+    column list. An empty header dict means "no usable header found".
+    """
+    header: dict[str, int] = {}
+    rows: list[list[str]] = []
+    with path.open() as fh:
+        for raw in fh:
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#"):
+                header.update(_parse_ahf_header(stripped))
+                continue
+            rows.append(stripped.split())
+    return header, rows
 
 
 def _read_mtree_records(path: Path) -> list[list[str]]:

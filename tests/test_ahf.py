@@ -242,3 +242,61 @@ def test_block_format_rejects_short_header(tmp_path: Path) -> None:
 def test_invalid_mtree_format_option_raises(tmp_path: Path) -> None:
     with pytest.raises(ReaderError, match="mtree_format"):
         AHFReader(ReaderSource({"snapshots": []}), options={"mtree_format": "weird"})
+
+
+# ---------------------------------------------------------- column overrides
+
+
+def test_header_columns_auto_detected(
+    ahf_with_real_header: list[dict[str, object]],
+) -> None:
+    """A 14-column AHF file with a proper ``#name(N)`` header parses
+    correctly despite its layout being unrelated to the hardcoded defaults."""
+    reader = AHFReader(ReaderSource({"snapshots": ahf_with_real_header}))
+    forest = next(iter(reader))
+    by_id = {int(h["nodeIndex"]): h for h in forest.halos}
+    assert by_id[100]["nodeMass"] == 2e12
+    assert by_id[101]["hostIndex"] == 100  # satellite
+    np.testing.assert_allclose(by_id[100]["spin"], 0.05)
+    np.testing.assert_allclose(by_id[101]["spin"], 0.04)
+
+
+def test_user_column_override_maps_alternate_name(
+    ahf_with_renamed_column: list[dict[str, object]],
+) -> None:
+    """A file whose spin column is called ``Spin`` (not ``lambda``) needs
+    a remap via ``options.columns``."""
+    # Without the override the required ``lambda`` column is missing.
+    no_override = AHFReader(ReaderSource({"snapshots": ahf_with_renamed_column}))
+    with pytest.raises(ReaderError, match="missing required columns"):
+        list(no_override)
+    # With the override ``Spin`` is at position 11 (1-based) → index 10.
+    reader = AHFReader(
+        ReaderSource({"snapshots": ahf_with_renamed_column}),
+        options={"columns": {"lambda": 10}},
+    )
+    forest = next(iter(reader))
+    np.testing.assert_allclose(forest.halos["spin"][0], 0.07)
+
+
+def test_too_few_columns_reports_missing(
+    ahf_with_too_few_columns: list[dict[str, object]],
+) -> None:
+    """No header + only 5 columns: the defaults' positions beyond column 4
+    are out of range and treated as missing, surfacing as a clear list."""
+    reader = AHFReader(ReaderSource({"snapshots": ahf_with_too_few_columns}))
+    with pytest.raises(ReaderError, match="missing required columns"):
+        list(reader)
+
+
+def test_columns_option_rejects_non_mapping() -> None:
+    with pytest.raises(ReaderError, match=r"options\.columns must be a mapping"):
+        AHFReader(ReaderSource({"snapshots": []}), options={"columns": [1, 2, 3]})
+
+
+def test_columns_option_rejects_non_integer_values() -> None:
+    with pytest.raises(ReaderError, match="integer column indices"):
+        AHFReader(
+            ReaderSource({"snapshots": []}),
+            options={"columns": {"lambda": "ten"}},
+        )
