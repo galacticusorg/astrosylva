@@ -54,14 +54,20 @@ class Forest:
 
 @dataclass
 class Metadata:
-    """Run metadata grouped to mirror the Galacticus HDF5 layout."""
+    """Run metadata grouped to mirror the Galacticus HDF5 layout.
+
+    ``halo_trees`` holds the flags the original C tool wrote under
+    ``/forestHalos`` as attributes (``haloMassesIncludeSubhalos``,
+    ``forestsAreSelfContained``, ``treesHaveSubhalos``,
+    ``velocitiesIncludeHubbleFlow``). The user-facing YAML key is
+    ``haloTrees``; the HDF5 group is ``/forestHalos``.
+    """
 
     cosmology: dict[str, Any] = field(default_factory=dict)
     units: dict[str, Any] = field(default_factory=dict)
     halo_trees: dict[str, Any] = field(default_factory=dict)
     group_finder: dict[str, Any] = field(default_factory=dict)
     simulation: dict[str, Any] = field(default_factory=dict)
-    forest_halos_attrs: dict[str, Any] = field(default_factory=dict)
     format_version: int = 2
 
     def groups(self) -> dict[str, dict[str, Any]]:
@@ -71,7 +77,7 @@ class Metadata:
             "/units": self.units,
             "/groupFinder": self.group_finder,
             "/simulation": self.simulation,
-            "/forestHalos": self.forest_halos_attrs,
+            "/forestHalos": self.halo_trees,
         }
 
 

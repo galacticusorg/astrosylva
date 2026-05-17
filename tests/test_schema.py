@@ -48,3 +48,21 @@ def test_metadata_groups_layout() -> None:
         "/simulation",
         "/forestHalos",
     }
+
+
+def test_metadata_halo_trees_attrs_emit_to_forestHalos_group() -> None:
+    """``haloTrees`` config attributes end up on the ``/forestHalos``
+    group, matching the legacy C tool's HDF5 layout."""
+    m = Metadata(
+        halo_trees={
+            "haloMassesIncludeSubhalos": 1,
+            "forestsAreSelfContained": 1,
+            "treesHaveSubhalos": 1,
+            "velocitiesIncludeHubbleFlow": 0,
+        }
+    )
+    forest_halos_attrs = m.groups()["/forestHalos"]
+    assert forest_halos_attrs["haloMassesIncludeSubhalos"] == 1
+    assert forest_halos_attrs["forestsAreSelfContained"] == 1
+    assert forest_halos_attrs["treesHaveSubhalos"] == 1
+    assert forest_halos_attrs["velocitiesIncludeHubbleFlow"] == 0

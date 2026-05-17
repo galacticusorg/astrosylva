@@ -71,7 +71,6 @@ def _run_conversion(cfg: Config) -> None:
         halo_trees=dict(cfg.metadata.halo_trees),
         group_finder=dict(cfg.metadata.group_finder),
         simulation=dict(cfg.metadata.simulation),
-        forest_halos_attrs=dict(cfg.metadata.forest_halos_attrs),
     )
     merged = _merge_metadata(reader_meta, config_meta)
 
@@ -95,7 +94,6 @@ def _merge_metadata(reader_meta: Metadata, config_meta: Metadata) -> Metadata:
         "halo_trees",
         "group_finder",
         "simulation",
-        "forest_halos_attrs",
     ):
         config_dict: dict[str, Any] = dict(getattr(config_meta, field_name))
         reader_dict: dict[str, Any] = dict(getattr(reader_meta, field_name))

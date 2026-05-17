@@ -31,10 +31,11 @@ class MetadataConfig(BaseModel):
 
     cosmology: dict[str, Any] = Field(default_factory=dict)
     units: dict[str, Any] = Field(default_factory=dict)
+    # `haloTrees` YAML attributes end up on the /forestHalos group in the
+    # output HDF5, matching the legacy C tool's layout.
     halo_trees: dict[str, Any] = Field(default_factory=dict, alias="haloTrees")
     group_finder: dict[str, Any] = Field(default_factory=dict, alias="groupFinder")
     simulation: dict[str, Any] = Field(default_factory=dict)
-    forest_halos_attrs: dict[str, Any] = Field(default_factory=dict, alias="forestHalosAttrs")
 
 
 class Config(BaseModel):
