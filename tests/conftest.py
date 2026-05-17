@@ -440,3 +440,87 @@ def lhalotree_two_chunks(tmp_path: Path) -> tuple[Path, Path]:
     _write_lhalotree_file(p0, [tree_a])
     _write_lhalotree_file(p1, [tree_b])
     return p0, p1
+
+
+# ---------------------------------------------------------------------------
+# AHF fixtures
+# ---------------------------------------------------------------------------
+
+# 24 AHF .AHF_halos columns matching _AHF_COLUMNS in the reader:
+#   0 ID  1 hostHalo  2 numSubStruct  3 Mvir  4 npart
+#   5-7 Xc Yc Zc      8-10 VXc VYc VZc
+#   11 Rvir           12-19 unused (filled with 0)
+#   20 lambda         21-23 Lx Ly Lz
+_AHF_FILLER = " ".join(["0"] * 8)  # columns 12..19
+
+
+def _ahf_halo_row(
+    halo_id: int,
+    host: int,
+    *,
+    mvir: float,
+    pos: tuple[float, float, float],
+    vel: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    rvir: float = 100.0,
+    spin: float = 0.05,
+    angmom: tuple[float, float, float] = (1e10, 1e10, 1e10),
+    npart: int = 1000,
+) -> str:
+    return (
+        f"{halo_id} {host} 0 {mvir} {npart} "
+        f"{pos[0]} {pos[1]} {pos[2]} "
+        f"{vel[0]} {vel[1]} {vel[2]} "
+        f"{rvir} {_AHF_FILLER} "
+        f"{spin} {angmom[0]} {angmom[1]} {angmom[2]}\n"
+    )
+
+
+@pytest.fixture
+def ahf_two_independent_forests(tmp_path: Path) -> list[dict[str, object]]:
+    """Two snapshots, two physically independent forests.
+
+    Snap 1 (latest): 100 (central) + 101 (sat of 100) + 200 (independent central)
+    Snap 0 (earlier): 1100 (prog of 100) + 1101 (prog of 101, sat of 1100)
+                      + 1200 (prog of 200, independent central)
+
+    Mtree links: 1100 -> 100, 1101 -> 101, 1200 -> 200.
+
+    Old "all-in-one-forest" behaviour produces 1 Forest with 6 halos;
+    union-find correctly yields two forests {100, 101, 1100, 1101} and
+    {200, 1200}.
+    """
+    snap0 = tmp_path / "snap_00.AHF_halos"
+    snap0_mtree = tmp_path / "snap_00.AHF_mtree"
+    snap1 = tmp_path / "snap_01.AHF_halos"
+    snap0.write_text(
+        "# AHF halos header\n"
+        + _ahf_halo_row(1100, 0, mvir=1e12, pos=(5.0, 5.0, 5.0))
+        + _ahf_halo_row(1101, 1100, mvir=1e11, pos=(5.1, 5.1, 5.1))
+        + _ahf_halo_row(1200, 0, mvir=8e11, pos=(10.0, 10.0, 10.0))
+    )
+    snap1.write_text(
+        "# AHF halos header\n"
+        + _ahf_halo_row(100, 0, mvir=2e12, pos=(5.0, 5.0, 5.0))
+        + _ahf_halo_row(101, 100, mvir=2e11, pos=(5.1, 5.1, 5.1))
+        + _ahf_halo_row(200, 0, mvir=1.5e12, pos=(10.0, 10.0, 10.0))
+    )
+    snap0_mtree.write_text(
+        "# halo_id n_shared desc_id\n1100 1000 100\n1101 200 101\n1200 800 200\n"
+    )
+    return [
+        {"halos": str(snap0), "mtree": str(snap0_mtree), "a": 0.5},
+        {"halos": str(snap1), "mtree": None, "a": 1.0},
+    ]
+
+
+@pytest.fixture
+def ahf_single_snapshot(tmp_path: Path) -> list[dict[str, object]]:
+    """One snapshot, three independent halos. Each becomes its own forest."""
+    snap = tmp_path / "snap_01.AHF_halos"
+    snap.write_text(
+        "# AHF halos header\n"
+        + _ahf_halo_row(100, 0, mvir=2e12, pos=(5.0, 5.0, 5.0))
+        + _ahf_halo_row(200, 0, mvir=1.5e12, pos=(10.0, 10.0, 10.0))
+        + _ahf_halo_row(300, 0, mvir=1e12, pos=(15.0, 15.0, 15.0))
+    )
+    return [{"halos": str(snap), "mtree": None, "a": 1.0}]

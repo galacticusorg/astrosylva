@@ -88,7 +88,7 @@ conflicts emit a `MetadataConflictWarning` showing both values.
 | Reader            | Status        | Notes                                          |
 |-------------------|---------------|------------------------------------------------|
 | Consistent-Trees  | Implemented   | Full port; column lookup is name-based.        |
-| AHF               | Experimental  | Reads `.AHF_halos` + `.AHF_mtree`.             |
+| AHF               | Experimental  | `.AHF_halos` + `.AHF_mtree`; union-find forests. |
 | SubLink           | Experimental  | HDF5; multi-chunk, FOF host resolution.        |
 | LHaloTree         | Experimental  | Millennium binary; multi-chunk; some proxies.  |
 

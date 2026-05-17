@@ -2,16 +2,19 @@
 
 AHF emits one ``.AHF_halos`` catalogue per snapshot plus ``.AHF_mtree`` files
 linking halos across snapshots. To produce merger trees in Galacticus format
-we walk pairs of snapshots and stitch descendant pointers.
+we walk pairs of snapshots, stitch descendant pointers, and partition the
+resulting halo set into forests via union-find on descendant + host edges.
 
-Source keys:
+Source keys
+-----------
 
 - ``snapshots`` : list of ``{halos: path, mtree: path | null, a: float}``
   ordered from earliest to latest. The last snapshot has ``mtree: null``.
 
 Status: experimental — handles the common AHF column layout (ID, hostHalo,
 Mvir, Rvir, Xc, Yc, Zc, VXc, VYc, VZc, Lx, Ly, Lz, lambda). Adjust
-``_AHF_COLUMNS`` if your build emits a different schema.
+``_AHF_COLUMNS`` if your build emits a different schema. Halo IDs are
+expected to be globally unique across snapshots (standard AHF behaviour).
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from typing import Any, ClassVar
 import numpy as np
 
 from astrosylva.exceptions import ReaderError
+from astrosylva.readers._forests import clamp_hosts_to_forest, group_by_union_find
 from astrosylva.readers.base import TreeReader
 from astrosylva.schema import DEFAULT_UNITS, HALO_DTYPE, Forest, Metadata
 
@@ -81,10 +85,27 @@ class AHFReader(TreeReader):
             if mtree_path is None:
                 continue
             self._apply_mtree(Path(mtree_path), per_snap[i], per_snap[i + 1])
-        # All halos in one giant forest for now; partitioning by connected
-        # components requires a union-find walk that is left for v2.
-        halos = np.concatenate(per_snap) if per_snap else np.empty(0, dtype=HALO_DTYPE)
-        self._forests = [Forest(forest_id=0, halos=halos, weight=1.0)]
+        if not per_snap:
+            self._forests = []
+            return
+        halos = np.concatenate(per_snap)
+        # Partition into self-contained forests via union-find on
+        # descendant + host edges. ``root_desc`` is just nodeIndex
+        # because AHF has no separate root-descendant concept.
+        forest_index = group_by_union_find(
+            halos["nodeIndex"],
+            halos["nodeIndex"],
+            halos["descendantIndex"],
+            halos["hostIndex"],
+        )
+        forests: list[Forest] = []
+        for forest_id, indices in forest_index.items():
+            forest_halos = halos[indices].copy()
+            forest_halos["hostIndex"] = clamp_hosts_to_forest(
+                forest_halos["hostIndex"], forest_halos["nodeIndex"]
+            )
+            forests.append(Forest(forest_id=forest_id, halos=forest_halos))
+        self._forests = forests
 
     @staticmethod
     def _load_halo_catalogue(path: Path, a: float) -> np.ndarray:
