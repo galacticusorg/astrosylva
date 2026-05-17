@@ -16,9 +16,26 @@ SubLink emits one HDF5 file per "chunk" with a flat layout::
     /RootDescendantID         int64[N]
     ...
 
-Subhalos are grouped into forests by ``RootDescendantID`` (Galacticus's
-"forest" semantics — all subhalos sharing an ultimate descendant land in the
-same forest).
+Forest grouping
+---------------
+
+A Galacticus forest must be self-contained: every gravitational interaction
+that affects a halo's evolution should be inside the same forest. The
+``RootDescendantID`` SubLink uses is not enough on its own — a satellite
+that is disrupted before merging with its host has a different
+``RootDescendantID`` from the host, even though they shared a FOF group
+for most of cosmic history.
+
+Forests are therefore the connected components of the union of two relations:
+
+1. *descendant edges*  — ``DescendantID(i) == nodeIndex(j)``
+2. *FOF edges*         — ``host(i) == nodeIndex(j)`` (host resolved per the
+   ``host_resolution`` option, below)
+
+Computed via union-find. Each component's ``forest_id`` is the minimum
+``RootDescendantID`` of its members. Switch back to the legacy
+``RootDescendantID``-only grouping with
+``options.forest_grouping = "root_descendant"``.
 
 Scale factor lookup
 -------------------
@@ -118,8 +135,25 @@ class SubLinkReader(TreeReader):
                 "host_resolution must be one of 'auto', 'field', 'fof_compute', 'self'; "
                 f"got {self._host_resolution!r}"
             )
+        self._forest_grouping: str = self.options.get("forest_grouping", "union_find")
+        if self._forest_grouping not in ("union_find", "root_descendant"):
+            raise ReaderError(
+                "forest_grouping must be 'union_find' or 'root_descendant'; "
+                f"got {self._forest_grouping!r}"
+            )
         self._snap_to_a = self._load_snap_table()
-        self._forest_ids: np.ndarray | None = None
+
+        # Populated by _ensure_indexed.
+        self._forest_index: dict[int, np.ndarray] | None = None
+        self._node_ids: np.ndarray | None = None
+        self._descendants: np.ndarray | None = None
+        self._snap_nums: np.ndarray | None = None
+        self._mass: np.ndarray | None = None
+        self._radius: np.ndarray | None = None
+        self._position: np.ndarray | None = None
+        self._velocity: np.ndarray | None = None
+        self._ang_mom: np.ndarray | None = None
+        self._raw_hosts: np.ndarray | None = None
 
     # -------------------------------------------------------- public API
 
@@ -128,19 +162,14 @@ class SubLinkReader(TreeReader):
 
     def __len__(self) -> int:
         self._ensure_indexed()
-        assert self._forest_ids is not None
-        return len(self._forest_ids)
+        assert self._forest_index is not None
+        return len(self._forest_index)
 
     def __iter__(self) -> Iterator[Forest]:
         self._ensure_indexed()
-        assert self._forest_ids is not None
-        path = self._tree_path()
-        with h5py.File(path, "r") as f:
-            root_desc = f["RootDescendantID"][:]
-            for forest_id in self._forest_ids:
-                mask = root_desc == forest_id
-                halos = self._build_halos(f, mask)
-                yield Forest(forest_id=int(forest_id), halos=halos)
+        assert self._forest_index is not None
+        for forest_id, indices in self._forest_index.items():
+            yield Forest(forest_id=forest_id, halos=self._build_halos(indices))
 
     # ----------------------------------------------------------- helpers
 
@@ -148,7 +177,7 @@ class SubLinkReader(TreeReader):
         return Path(self.source.require("tree_file"))
 
     def _ensure_indexed(self) -> None:
-        if self._forest_ids is not None:
+        if self._forest_index is not None:
             return
         path = self._tree_path()
         if not path.is_file():
@@ -158,7 +187,23 @@ class SubLinkReader(TreeReader):
                 raise ReaderError(
                     f"{path} does not look like a SubLink tree file (missing /RootDescendantID)."
                 )
-            self._forest_ids = np.unique(f["RootDescendantID"][:])
+            self._node_ids = np.asarray(f["SubhaloID"][:], dtype=np.int64)
+            self._descendants = np.asarray(f["DescendantID"][:], dtype=np.int64)
+            root_desc = np.asarray(f["RootDescendantID"][:], dtype=np.int64)
+            self._snap_nums = np.asarray(f["SnapNum"][:], dtype=np.int64)
+            self._mass = np.asarray(f["SubhaloMass"][:], dtype=np.float64) * 1e10
+            self._radius = np.asarray(f["SubhaloHalfmassRad"][:], dtype=np.float64) / 1000.0
+            self._position = np.asarray(f["SubhaloPos"][:], dtype=np.float64) / 1000.0
+            self._velocity = np.asarray(f["SubhaloVel"][:], dtype=np.float64)
+            self._ang_mom = np.asarray(f["SubhaloSpin"][:], dtype=np.float64)
+            self._raw_hosts = self._compute_raw_hosts(f, self._node_ids, self._snap_nums)
+
+        if self._forest_grouping == "root_descendant":
+            self._forest_index = _group_by_root_descendant(root_desc)
+        else:
+            self._forest_index = _group_by_union_find(
+                self._node_ids, root_desc, self._descendants, self._raw_hosts
+            )
 
     def _load_snap_table(self) -> dict[int, float]:
         table_path = self.source.get("snapshot_table")
@@ -199,37 +244,48 @@ class SubLinkReader(TreeReader):
             out[snap_nums == snap] = a
         return out
 
-    def _build_halos(self, f: h5py.File, mask: np.ndarray) -> np.ndarray:
-        n = int(mask.sum())
+    def _build_halos(self, indices: np.ndarray) -> np.ndarray:
+        assert self._node_ids is not None
+        assert self._descendants is not None
+        assert self._snap_nums is not None
+        assert self._mass is not None
+        assert self._radius is not None
+        assert self._position is not None
+        assert self._velocity is not None
+        assert self._ang_mom is not None
+        assert self._raw_hosts is not None
+
+        n = len(indices)
         halos = np.empty(n, dtype=HALO_DTYPE)
-        node_ids = f["SubhaloID"][mask].astype(np.int64)
+        node_ids = self._node_ids[indices]
         halos["nodeIndex"] = node_ids
-        halos["descendantIndex"] = f["DescendantID"][mask]
-        snap_nums = f["SnapNum"][mask].astype(np.int64)
-        halos["hostIndex"] = self._resolve_hosts(f, mask, node_ids, snap_nums)
+        halos["descendantIndex"] = self._descendants[indices]
+        snap_nums = self._snap_nums[indices]
+        raw_hosts_forest = self._raw_hosts[indices]
+        halos["hostIndex"] = _clamp_hosts_to_forest(raw_hosts_forest, node_ids)
         halos["expansionFactor"] = self._scale_factors_for(snap_nums)
-        halos["nodeMass"] = f["SubhaloMass"][mask].astype(np.float64) * 1e10  # 10^10 Msun/h
-        halos["scaleRadius"] = f["SubhaloHalfmassRad"][mask].astype(np.float64) / 1000.0
-        halos["position"] = f["SubhaloPos"][mask].astype(np.float64) / 1000.0
-        halos["velocity"] = f["SubhaloVel"][mask].astype(np.float64)
-        halos["angularMomentum"] = f["SubhaloSpin"][mask].astype(np.float64)
+        halos["nodeMass"] = self._mass[indices]
+        halos["scaleRadius"] = self._radius[indices]
+        halos["position"] = self._position[indices]
+        halos["velocity"] = self._velocity[indices]
+        halos["angularMomentum"] = self._ang_mom[indices]
         halos["spin"] = 0.0
         return halos
 
-    def _resolve_hosts(
-        self,
-        f: h5py.File,
-        mask: np.ndarray,
-        node_ids: np.ndarray,
-        snap_nums: np.ndarray,
+    def _compute_raw_hosts(
+        self, f: h5py.File, node_ids: np.ndarray, snap_nums: np.ndarray
     ) -> np.ndarray:
+        """Return raw host pointers for every subhalo in the chunk.
+
+        These are used both to build forests (union-find) and to populate
+        ``hostIndex`` per-halo (after forest-level clamping).
+        """
         mode = self._host_resolution
         if mode == "self":
             return np.array(node_ids, copy=True)
 
         if mode in ("auto", "field") and "FirstSubhaloInFOFGroupID" in f:
-            hosts = np.asarray(f["FirstSubhaloInFOFGroupID"][mask], dtype=np.int64)
-            return _clamp_hosts_to_forest(hosts, node_ids)
+            return np.asarray(f["FirstSubhaloInFOFGroupID"][:], dtype=np.int64)
         if mode == "field":
             raise ReaderError(
                 "host_resolution='field' requires /FirstSubhaloInFOFGroupID in the SubLink file."
@@ -239,8 +295,8 @@ class SubLinkReader(TreeReader):
             has_grnr = "SubhaloGrNr" in f
             has_subfind = "SubfindID" in f
             if has_grnr and has_subfind:
-                grnr = np.asarray(f["SubhaloGrNr"][mask], dtype=np.int64)
-                subfind = np.asarray(f["SubfindID"][mask], dtype=np.int64)
+                grnr = np.asarray(f["SubhaloGrNr"][:], dtype=np.int64)
+                subfind = np.asarray(f["SubfindID"][:], dtype=np.int64)
                 return _hosts_from_fof(node_ids, snap_nums, grnr, subfind)
             if mode == "fof_compute":
                 raise ReaderError(
@@ -293,3 +349,59 @@ def _hosts_from_fof(
         if cid is not None:
             out[i] = cid
     return out
+
+
+def _group_by_root_descendant(root_desc: np.ndarray) -> dict[int, np.ndarray]:
+    """Legacy grouping: each ``RootDescendantID`` is its own forest."""
+    out: dict[int, list[int]] = {}
+    for i, rd in enumerate(root_desc):
+        out.setdefault(int(rd), []).append(i)
+    return {fid: np.array(idxs, dtype=np.int64) for fid, idxs in sorted(out.items())}
+
+
+def _group_by_union_find(
+    node_ids: np.ndarray,
+    root_desc: np.ndarray,
+    descendants: np.ndarray,
+    hosts: np.ndarray,
+) -> dict[int, np.ndarray]:
+    """Union-find on the union of descendant edges and host edges.
+
+    Forest ID for each connected component is the minimum
+    ``RootDescendantID`` of its members.
+    """
+    n = node_ids.shape[0]
+    id_to_idx: dict[int, int] = {int(nid): i for i, nid in enumerate(node_ids)}
+    parent = np.arange(n, dtype=np.int64)
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = int(parent[x])
+        return x
+
+    def union(x: int, y: int) -> None:
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[rx] = ry
+
+    for i in range(n):
+        d_idx = id_to_idx.get(int(descendants[i]))
+        if d_idx is not None:
+            union(i, d_idx)
+        h_idx = id_to_idx.get(int(hosts[i]))
+        if h_idx is not None:
+            union(i, h_idx)
+
+    components: dict[int, list[int]] = {}
+    for i in range(n):
+        components.setdefault(find(i), []).append(i)
+
+    labeled: dict[int, list[int]] = {}
+    for indices in components.values():
+        forest_id = min(int(root_desc[i]) for i in indices)
+        # If two components produced the same forest_id (RootDescendantID
+        # collision across components), merge them — losing halos here
+        # would be silent corruption.
+        labeled.setdefault(forest_id, []).extend(indices)
+    return {fid: np.array(sorted(idxs), dtype=np.int64) for fid, idxs in sorted(labeled.items())}

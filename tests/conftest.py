@@ -178,3 +178,48 @@ def sublink_hosts_no_info_file(tmp_path: Path) -> Path:
     path = tmp_path / "tree_hosts_none.hdf5"
     _write_sublink_hosts_fixture(path, include_first_sub_in_fof=False, include_grnr_subfind=False)
     return path
+
+
+@pytest.fixture
+def sublink_split_roots_file(tmp_path: Path) -> Path:
+    """SubLink fixture where RootDescendantID alone splits a real forest.
+
+    Layout (snap 1 = final):
+
+    Snap 1: 100 (central FOF 0, desc=-1, RootDescendantID=100)
+            101 (satellite FOF 0, desc=-1, RootDescendantID=101)
+    Snap 0: 200 (central FOF 0, desc=100, RootDescendantID=100)
+            201 (satellite FOF 0, desc=101, RootDescendantID=101)
+
+    With RootDescendantID grouping this becomes two forests
+    ({100, 200} and {101, 201}). With union-find on
+    descendant + host edges, all four belong to one forest because
+    101 and 201 share their FOF central (100 and 200 respectively).
+    """
+    path = tmp_path / "tree_split_roots.hdf5"
+    with h5py.File(path, "w") as f:
+        ids = np.array([100, 101, 200, 201], dtype=np.int64)
+        f.create_dataset("SubhaloID", data=ids)
+        f.create_dataset("DescendantID", data=np.array([-1, -1, 100, 101], dtype=np.int64))
+        f.create_dataset("FirstProgenitorID", data=np.array([200, 201, -1, -1], dtype=np.int64))
+        f.create_dataset("NextProgenitorID", data=np.full(4, -1, dtype=np.int64))
+        f.create_dataset("RootDescendantID", data=np.array([100, 101, 100, 101], dtype=np.int64))
+        f.create_dataset("TreeID", data=np.array([1, 2, 1, 2], dtype=np.int64))
+        f.create_dataset("SnapNum", data=np.array([1, 1, 0, 0], dtype=np.int32))
+        f.create_dataset(
+            "FirstSubhaloInFOFGroupID",
+            data=np.array([100, 100, 200, 200], dtype=np.int64),
+        )
+        f.create_dataset("SubhaloGrNr", data=np.array([0, 0, 0, 0], dtype=np.int32))
+        f.create_dataset("SubfindID", data=np.array([0, 1, 0, 1], dtype=np.int32))
+        f.create_dataset("SubhaloMass", data=np.array([100.0, 10.0, 80.0, 8.0], dtype=np.float32))
+        f.create_dataset(
+            "SubhaloHalfmassRad", data=np.array([20.0, 5.0, 18.0, 4.0], dtype=np.float32)
+        )
+        f.create_dataset(
+            "SubhaloPos",
+            data=np.array([[0.0] * 3, [1.0] * 3, [0.0] * 3, [1.0] * 3], dtype=np.float32),
+        )
+        f.create_dataset("SubhaloVel", data=np.zeros((4, 3), dtype=np.float32))
+        f.create_dataset("SubhaloSpin", data=np.zeros((4, 3), dtype=np.float32))
+    return path

@@ -79,6 +79,25 @@ By default a missing table or missing snap raises
 :class:`ReaderError`. Set ``options.strict_scale_factors: false`` to
 downgrade to a warning (missing values become ``NaN``).
 
+SubLink forest grouping
+~~~~~~~~~~~~~~~~~~~~~~~
+
+A Galacticus forest must be self-contained: every gravitational
+interaction that affects a halo's evolution should be inside the same
+forest. ``RootDescendantID`` alone is not enough — a satellite that is
+disrupted before merging with its host has a different
+``RootDescendantID`` from the host, even though they shared a FOF
+group for most of cosmic history.
+
+``options.forest_grouping``:
+
+- ``"union_find"`` (default): connected components of the union of
+  descendant edges and host edges. Forest IDs are the smallest
+  ``RootDescendantID`` in each component.
+- ``"root_descendant"``: legacy behaviour — one forest per
+  ``RootDescendantID``. Satellites that never merge end up in their
+  own forest, and their host pointers get clamped to self.
+
 SubLink host-pointer resolution
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
