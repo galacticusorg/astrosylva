@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import h5py
+import numpy as np
 import pytest
 
 CT_HEADER = (
@@ -58,3 +60,46 @@ def ct_data_dir(tmp_path: Path) -> Path:
     # forests.list: tree_root_id forest_id weight
     (out / "forests.list").write_text("TreeRootID ForestID Weight\n1001 100 1.0\n2001 100 1.0\n")
     return out
+
+
+@pytest.fixture
+def sublink_tree_file(tmp_path: Path) -> Path:
+    """Synthesise a minimal SubLink-style HDF5 tree file.
+
+    Three subhalos belonging to one forest (RootDescendantID = 100) at
+    SnapNum 2, 1, 0. SubhaloMass is in 10^10 Msun/h, positions in kpc/h.
+    """
+    path = tmp_path / "tree_extended.0.hdf5"
+    n = 3
+    with h5py.File(path, "w") as f:
+        f.create_dataset("SubhaloID", data=np.array([300, 200, 100], dtype=np.int64))
+        f.create_dataset("DescendantID", data=np.array([200, 100, -1], dtype=np.int64))
+        f.create_dataset("FirstProgenitorID", data=np.array([-1, 300, 200], dtype=np.int64))
+        f.create_dataset("NextProgenitorID", data=np.full(n, -1, dtype=np.int64))
+        f.create_dataset("RootDescendantID", data=np.full(n, 100, dtype=np.int64))
+        f.create_dataset("TreeID", data=np.full(n, 1, dtype=np.int64))
+        f.create_dataset("SnapNum", data=np.array([2, 1, 0], dtype=np.int32))
+        f.create_dataset("SubhaloMass", data=np.array([10.0, 50.0, 100.0], dtype=np.float32))
+        f.create_dataset("SubhaloHalfmassRad", data=np.array([5.0, 10.0, 20.0], dtype=np.float32))
+        f.create_dataset(
+            "SubhaloPos",
+            data=np.array(
+                [[1000.0, 2000.0, 3000.0], [1100.0, 2100.0, 3100.0], [1200.0, 2200.0, 3200.0]],
+                dtype=np.float32,
+            ),
+        )
+        f.create_dataset(
+            "SubhaloVel",
+            data=np.array(
+                [[10.0, 20.0, 30.0], [11.0, 21.0, 31.0], [12.0, 22.0, 32.0]],
+                dtype=np.float32,
+            ),
+        )
+        f.create_dataset(
+            "SubhaloSpin",
+            data=np.array(
+                [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9]],
+                dtype=np.float32,
+            ),
+        )
+    return path

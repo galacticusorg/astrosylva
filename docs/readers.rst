@@ -60,3 +60,21 @@ Reader             Required ``source`` keys
 ``sublink``          ``tree_file``
 ``ahf``              ``snapshots`` (list of dicts)
 ================== ==============================================
+
+SubLink scale-factor table
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+SubLink HDF5 files store ``SnapNum`` but not the per-snapshot scale
+factor. Supply one of, in priority order:
+
+1. ``source.snapshot_table``: path to a whitespace-delimited file
+   ``snap_num  (scale_factor | redshift)``. Control the second column's
+   meaning with ``options.snapshot_table_quantity`` (``"scale_factor"``
+   default, or ``"redshift"``).
+2. ``options.scale_factors``: inline ``{snap_num: a}`` mapping.
+3. ``options.redshifts``: inline ``{snap_num: z}`` mapping (converted
+   to ``a = 1/(1+z)``). Mutually exclusive with ``scale_factors``.
+
+By default a missing table or missing snap raises
+:class:`ReaderError`. Set ``options.strict_scale_factors: false`` to
+downgrade to a warning (missing values become ``NaN``).
