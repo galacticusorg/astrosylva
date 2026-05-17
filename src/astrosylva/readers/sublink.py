@@ -1,5 +1,17 @@
 """SubLink (IllustrisTNG-style) HDF5 reader.
 
+Source keys
+-----------
+
+- ``source.tree_files`` : list of HDF5 chunk paths (or a single path).
+- ``source.tree_file``  : single HDF5 chunk path (back-compat alias).
+
+A SubLink run is typically sharded into many ``tree_extended.<N>.hdf5``
+files. ``tree_files`` accepts the full list; the reader loads every
+chunk and runs forest grouping over the union. Host and descendant
+pointers that cross chunk boundaries resolve correctly as long as both
+ends are included in the file list.
+
 SubLink emits one HDF5 file per "chunk" with a flat layout::
 
     /SubhaloID                int64[N]
@@ -173,13 +185,30 @@ class SubLinkReader(TreeReader):
 
     # ----------------------------------------------------------- helpers
 
-    def _tree_path(self) -> Path:
-        return Path(self.source.require("tree_file"))
+    def _resolve_chunk_paths(self) -> list[Path]:
+        files = self.source.get("tree_files")
+        if files is not None:
+            if isinstance(files, (str, Path)):
+                paths = [Path(files)]
+            elif isinstance(files, (list, tuple)):
+                paths = [Path(p) for p in files]
+            else:
+                raise ReaderError(
+                    "source.tree_files must be a list of paths or a single path; "
+                    f"got {type(files).__name__}"
+                )
+        elif "tree_file" in self.source.paths:
+            paths = [Path(self.source.require("tree_file"))]
+        else:
+            raise ReaderError(
+                "SubLink reader requires source.tree_file (single chunk) or "
+                "source.tree_files (list of chunks)."
+            )
+        if not paths:
+            raise ReaderError("SubLink reader received an empty chunk list.")
+        return paths
 
-    def _ensure_indexed(self) -> None:
-        if self._forest_index is not None:
-            return
-        path = self._tree_path()
+    def _load_chunk(self, path: Path) -> dict[str, np.ndarray]:
         if not path.is_file():
             raise ReaderError(f"SubLink tree file not found: {path}")
         with h5py.File(path, "r") as f:
@@ -187,16 +216,36 @@ class SubLinkReader(TreeReader):
                 raise ReaderError(
                     f"{path} does not look like a SubLink tree file (missing /RootDescendantID)."
                 )
-            self._node_ids = np.asarray(f["SubhaloID"][:], dtype=np.int64)
-            self._descendants = np.asarray(f["DescendantID"][:], dtype=np.int64)
-            root_desc = np.asarray(f["RootDescendantID"][:], dtype=np.int64)
-            self._snap_nums = np.asarray(f["SnapNum"][:], dtype=np.int64)
-            self._mass = np.asarray(f["SubhaloMass"][:], dtype=np.float64) * 1e10
-            self._radius = np.asarray(f["SubhaloHalfmassRad"][:], dtype=np.float64) / 1000.0
-            self._position = np.asarray(f["SubhaloPos"][:], dtype=np.float64) / 1000.0
-            self._velocity = np.asarray(f["SubhaloVel"][:], dtype=np.float64)
-            self._ang_mom = np.asarray(f["SubhaloSpin"][:], dtype=np.float64)
-            self._raw_hosts = self._compute_raw_hosts(f, self._node_ids, self._snap_nums)
+            node_ids = np.asarray(f["SubhaloID"][:], dtype=np.int64)
+            snap_nums = np.asarray(f["SnapNum"][:], dtype=np.int64)
+            return {
+                "node_ids": node_ids,
+                "descendants": np.asarray(f["DescendantID"][:], dtype=np.int64),
+                "root_desc": np.asarray(f["RootDescendantID"][:], dtype=np.int64),
+                "snap_nums": snap_nums,
+                "mass": np.asarray(f["SubhaloMass"][:], dtype=np.float64) * 1e10,
+                "radius": np.asarray(f["SubhaloHalfmassRad"][:], dtype=np.float64) / 1000.0,
+                "position": np.asarray(f["SubhaloPos"][:], dtype=np.float64) / 1000.0,
+                "velocity": np.asarray(f["SubhaloVel"][:], dtype=np.float64),
+                "ang_mom": np.asarray(f["SubhaloSpin"][:], dtype=np.float64),
+                "raw_hosts": self._compute_raw_hosts(f, node_ids, snap_nums),
+            }
+
+    def _ensure_indexed(self) -> None:
+        if self._forest_index is not None:
+            return
+        paths = self._resolve_chunk_paths()
+        chunks = [self._load_chunk(p) for p in paths]
+        self._node_ids = np.concatenate([c["node_ids"] for c in chunks])
+        self._descendants = np.concatenate([c["descendants"] for c in chunks])
+        root_desc = np.concatenate([c["root_desc"] for c in chunks])
+        self._snap_nums = np.concatenate([c["snap_nums"] for c in chunks])
+        self._mass = np.concatenate([c["mass"] for c in chunks])
+        self._radius = np.concatenate([c["radius"] for c in chunks])
+        self._position = np.concatenate([c["position"] for c in chunks])
+        self._velocity = np.concatenate([c["velocity"] for c in chunks])
+        self._ang_mom = np.concatenate([c["ang_mom"] for c in chunks])
+        self._raw_hosts = np.concatenate([c["raw_hosts"] for c in chunks])
 
         if self._forest_grouping == "root_descendant":
             self._forest_index = _group_by_root_descendant(root_desc)

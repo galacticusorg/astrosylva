@@ -61,6 +61,27 @@ Reader             Required ``source`` keys
 ``ahf``              ``snapshots`` (list of dicts)
 ================== ==============================================
 
+SubLink multi-chunk loading
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A SubLink run is normally sharded into many ``tree_extended.<N>.hdf5``
+files. Pass the full list as ``source.tree_files``:
+
+.. code-block:: yaml
+
+   reader:
+     name: sublink
+     source:
+       tree_files:
+         - tree_extended.0.hdf5
+         - tree_extended.1.hdf5
+         - tree_extended.2.hdf5
+
+The reader loads every chunk and runs forest grouping over the union.
+Cross-chunk host and descendant pointers resolve as long as both ends
+are in the file list. The legacy single-file key ``source.tree_file``
+is still accepted.
+
 SubLink scale-factor table
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 

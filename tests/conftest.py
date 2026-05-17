@@ -180,6 +180,76 @@ def sublink_hosts_no_info_file(tmp_path: Path) -> Path:
     return path
 
 
+def _write_minimal_sublink_chunk(
+    path: Path,
+    *,
+    ids: np.ndarray,
+    desc: np.ndarray,
+    root_desc: np.ndarray,
+    snaps: np.ndarray,
+    first_sub_in_fof: np.ndarray,
+) -> None:
+    """Write a small SubLink-style HDF5 file with zeroed-out physical fields.
+
+    Used for building multi-chunk fixtures where only the topology fields
+    matter for the test assertions.
+    """
+    n = ids.shape[0]
+    with h5py.File(path, "w") as f:
+        f.create_dataset("SubhaloID", data=ids)
+        f.create_dataset("DescendantID", data=desc)
+        f.create_dataset("FirstProgenitorID", data=np.full(n, -1, dtype=np.int64))
+        f.create_dataset("NextProgenitorID", data=np.full(n, -1, dtype=np.int64))
+        f.create_dataset("RootDescendantID", data=root_desc)
+        f.create_dataset("TreeID", data=np.arange(n, dtype=np.int64))
+        f.create_dataset("SnapNum", data=snaps)
+        f.create_dataset("FirstSubhaloInFOFGroupID", data=first_sub_in_fof)
+        f.create_dataset("SubhaloMass", data=np.ones(n, dtype=np.float32))
+        f.create_dataset("SubhaloHalfmassRad", data=np.ones(n, dtype=np.float32))
+        f.create_dataset("SubhaloPos", data=np.zeros((n, 3), dtype=np.float32))
+        f.create_dataset("SubhaloVel", data=np.zeros((n, 3), dtype=np.float32))
+        f.create_dataset("SubhaloSpin", data=np.zeros((n, 3), dtype=np.float32))
+
+
+@pytest.fixture
+def sublink_two_chunks(tmp_path: Path) -> tuple[Path, Path]:
+    """Two SubLink chunks where hosts and progenitors cross chunk boundaries.
+
+    Chunk 0 holds the centrals of two snapshots:
+
+    - SubhaloID 100 (RootDescendantID=100, central FOF, desc=-1, snap 1)
+    - SubhaloID 200 (RootDescendantID=100, central FOF, desc=100, snap 0)
+
+    Chunk 1 holds the satellites:
+
+    - SubhaloID 101 (RootDescendantID=101, satellite of 100, desc=-1, snap 1)
+    - SubhaloID 201 (RootDescendantID=101, satellite of 200, desc=101, snap 0)
+
+    Both ``FirstSubhaloInFOFGroupID`` pointers in chunk 1 reference
+    subhalos that live in chunk 0 — they only resolve when both chunks
+    are loaded together.
+    """
+    p0 = tmp_path / "tree.0.hdf5"
+    p1 = tmp_path / "tree.1.hdf5"
+    _write_minimal_sublink_chunk(
+        p0,
+        ids=np.array([100, 200], dtype=np.int64),
+        desc=np.array([-1, 100], dtype=np.int64),
+        root_desc=np.array([100, 100], dtype=np.int64),
+        snaps=np.array([1, 0], dtype=np.int32),
+        first_sub_in_fof=np.array([100, 200], dtype=np.int64),
+    )
+    _write_minimal_sublink_chunk(
+        p1,
+        ids=np.array([101, 201], dtype=np.int64),
+        desc=np.array([-1, 101], dtype=np.int64),
+        root_desc=np.array([101, 101], dtype=np.int64),
+        snaps=np.array([1, 0], dtype=np.int32),
+        first_sub_in_fof=np.array([100, 200], dtype=np.int64),
+    )
+    return p0, p1
+
+
 @pytest.fixture
 def sublink_split_roots_file(tmp_path: Path) -> Path:
     """SubLink fixture where RootDescendantID alone splits a real forest.
