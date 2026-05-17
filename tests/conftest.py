@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 
 import h5py
 import numpy as np
 import pytest
+
+from astrosylva.readers.lhalotree import LHALO_HALO_DTYPE
 
 CT_HEADER = (
     "#scale(0) id(1) desc_scale(2) desc_id(3) num_prog(4) pid(5) upid(6) "
@@ -293,3 +296,147 @@ def sublink_split_roots_file(tmp_path: Path) -> Path:
         f.create_dataset("SubhaloVel", data=np.zeros((4, 3), dtype=np.float32))
         f.create_dataset("SubhaloSpin", data=np.zeros((4, 3), dtype=np.float32))
     return path
+
+
+def _make_lhalo_halo(**fields: object) -> np.ndarray:
+    h = np.zeros(1, dtype=LHALO_HALO_DTYPE)[0]
+    for k, v in fields.items():
+        h[k] = v
+    return h
+
+
+def _write_lhalotree_file(path: Path, trees: list[np.ndarray]) -> None:
+    """Write an LHaloTree binary chunk.
+
+    ``trees`` is a list of arrays of dtype LHALO_HALO_DTYPE.
+    """
+    n_trees = len(trees)
+    per_tree = np.array([t.size for t in trees], dtype="<i4")
+    tot = int(per_tree.sum())
+    with path.open("wb") as fh:
+        fh.write(struct.pack("<ii", n_trees, tot))
+        per_tree.tofile(fh)
+        for t in trees:
+            t.astype(LHALO_HALO_DTYPE).tofile(fh)
+
+
+@pytest.fixture
+def lhalotree_single_tree(tmp_path: Path) -> Path:
+    """One LHaloTree tree with 4 halos: central + satellite at two snaps.
+
+    Local-index layout (LHaloTree convention: progenitors come after the
+    descendant)::
+
+        idx  snap  desc  fpro  ffof   role
+         0    1     -1    2     0    central, snap 1 (final)
+         1    1     -1    3     0    satellite of halo 0, snap 1
+         2    0      0    -1    2    progenitor of halo 0, snap 0
+         3    0      1    -1    2    progenitor of halo 1, snap 0
+
+    Centrals have FirstHaloInFOFgroup == self_local; satellites point
+    at the central in their snap.
+    """
+    halos = np.stack(
+        [
+            _make_lhalo_halo(
+                Descendant=-1,
+                FirstProgenitor=2,
+                NextProgenitor=-1,
+                FirstHaloInFOFgroup=0,
+                NextHaloInFOFgroup=1,
+                Len=1000,
+                Mvir=10.0,
+                Pos=[0.0, 0.0, 0.0],
+                Vel=[100.0, 0.0, 0.0],
+                Spin=[1.0, 2.0, 3.0],
+                SnapNum=1,
+                SubHalfMass=0.05,
+            ),
+            _make_lhalo_halo(
+                Descendant=-1,
+                FirstProgenitor=3,
+                NextProgenitor=-1,
+                FirstHaloInFOFgroup=0,
+                NextHaloInFOFgroup=-1,
+                Len=100,
+                Mvir=1.0,
+                Pos=[1.0, 1.0, 1.0],
+                Vel=[110.0, 0.0, 0.0],
+                Spin=[0.1, 0.2, 0.3],
+                SnapNum=1,
+                SubHalfMass=0.005,
+            ),
+            _make_lhalo_halo(
+                Descendant=0,
+                FirstProgenitor=-1,
+                NextProgenitor=-1,
+                FirstHaloInFOFgroup=2,
+                NextHaloInFOFgroup=3,
+                Len=800,
+                Mvir=8.0,
+                Pos=[0.0, 0.0, 0.0],
+                Vel=[120.0, 0.0, 0.0],
+                Spin=[1.0, 2.0, 3.0],
+                SnapNum=0,
+                SubHalfMass=0.04,
+            ),
+            _make_lhalo_halo(
+                Descendant=1,
+                FirstProgenitor=-1,
+                NextProgenitor=-1,
+                FirstHaloInFOFgroup=2,
+                NextHaloInFOFgroup=-1,
+                Len=80,
+                Mvir=0.8,
+                Pos=[1.0, 1.0, 1.0],
+                Vel=[130.0, 0.0, 0.0],
+                Spin=[0.1, 0.2, 0.3],
+                SnapNum=0,
+                SubHalfMass=0.004,
+            ),
+        ]
+    )
+    path = tmp_path / "trees_000.0"
+    _write_lhalotree_file(path, [halos])
+    return path
+
+
+@pytest.fixture
+def lhalotree_two_trees(tmp_path: Path) -> Path:
+    """One LHaloTree file with two independent trees (2 halos each)."""
+    tree_a = np.stack(
+        [
+            _make_lhalo_halo(Descendant=-1, FirstHaloInFOFgroup=0, SnapNum=1, Mvir=5.0),
+            _make_lhalo_halo(Descendant=0, FirstHaloInFOFgroup=1, SnapNum=0, Mvir=4.0),
+        ]
+    )
+    tree_b = np.stack(
+        [
+            _make_lhalo_halo(Descendant=-1, FirstHaloInFOFgroup=0, SnapNum=1, Mvir=20.0),
+            _make_lhalo_halo(Descendant=0, FirstHaloInFOFgroup=1, SnapNum=0, Mvir=18.0),
+        ]
+    )
+    path = tmp_path / "trees_000.0"
+    _write_lhalotree_file(path, [tree_a, tree_b])
+    return path
+
+
+@pytest.fixture
+def lhalotree_two_chunks(tmp_path: Path) -> tuple[Path, Path]:
+    """Two LHaloTree files, each holding one tree."""
+    tree_a = np.stack(
+        [
+            _make_lhalo_halo(Descendant=-1, FirstHaloInFOFgroup=0, SnapNum=1, Mvir=5.0),
+            _make_lhalo_halo(Descendant=0, FirstHaloInFOFgroup=1, SnapNum=0, Mvir=4.0),
+        ]
+    )
+    tree_b = np.stack(
+        [
+            _make_lhalo_halo(Descendant=-1, FirstHaloInFOFgroup=0, SnapNum=1, Mvir=20.0),
+        ]
+    )
+    p0 = tmp_path / "trees_000.0"
+    p1 = tmp_path / "trees_000.1"
+    _write_lhalotree_file(p0, [tree_a])
+    _write_lhalotree_file(p1, [tree_b])
+    return p0, p1

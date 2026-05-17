@@ -101,35 +101,9 @@ import h5py
 import numpy as np
 
 from astrosylva.exceptions import ReaderError
+from astrosylva.readers._snapshot_table import apply_scale_factors, load_snap_table
 from astrosylva.readers.base import ReaderSource, TreeReader
 from astrosylva.schema import DEFAULT_UNITS, HALO_DTYPE, Forest, Metadata
-
-
-def _read_snap_table_file(path: Path, quantity: str) -> dict[int, float]:
-    if quantity not in ("scale_factor", "redshift"):
-        raise ReaderError(
-            f"snapshot_table_quantity must be 'scale_factor' or 'redshift', got {quantity!r}"
-        )
-    if not path.is_file():
-        raise ReaderError(f"snapshot table file not found: {path}")
-    out: dict[int, float] = {}
-    with path.open() as fh:
-        for raw in fh:
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            try:
-                snap = int(parts[0])
-            except ValueError:
-                continue  # header line
-            value = float(parts[1])
-            out[snap] = value if quantity == "scale_factor" else 1.0 / (1.0 + value)
-    if not out:
-        raise ReaderError(f"snapshot table {path} contained no usable rows")
-    return out
 
 
 class SubLinkReader(TreeReader):
@@ -153,7 +127,7 @@ class SubLinkReader(TreeReader):
                 "forest_grouping must be 'union_find' or 'root_descendant'; "
                 f"got {self._forest_grouping!r}"
             )
-        self._snap_to_a = self._load_snap_table()
+        self._snap_to_a = load_snap_table(source, self.options)
 
         # Populated by _ensure_indexed.
         self._forest_index: dict[int, np.ndarray] | None = None
@@ -254,44 +228,13 @@ class SubLinkReader(TreeReader):
                 self._node_ids, root_desc, self._descendants, self._raw_hosts
             )
 
-    def _load_snap_table(self) -> dict[int, float]:
-        table_path = self.source.get("snapshot_table")
-        has_scales = "scale_factors" in self.options
-        has_redshifts = "redshifts" in self.options
-        if has_scales and has_redshifts:
-            raise ReaderError("Specify at most one of options.scale_factors or options.redshifts.")
-        if table_path is not None:
-            qty = self.options.get("snapshot_table_quantity", "scale_factor")
-            return _read_snap_table_file(Path(table_path), qty)
-        if has_scales:
-            return {int(k): float(v) for k, v in self.options["scale_factors"].items()}
-        if has_redshifts:
-            return {int(k): 1.0 / (1.0 + float(v)) for k, v in self.options["redshifts"].items()}
-        return {}
-
     def _scale_factors_for(self, snap_nums: np.ndarray) -> np.ndarray:
-        if not self._snap_to_a:
-            msg = (
-                "SubLink reader has no snapshot scale-factor table; supply one of "
-                "source.snapshot_table, options.scale_factors, or options.redshifts."
-            )
-            if self._strict_scale_factors:
-                raise ReaderError(msg)
-            warnings.warn(msg, stacklevel=2)
-            return np.full(snap_nums.shape, np.nan, dtype=np.float64)
-
-        unique = {int(s) for s in np.unique(snap_nums)}
-        missing = sorted(unique - self._snap_to_a.keys())
-        if missing:
-            msg = f"snapshot scale-factor table is missing entries for SnapNum: {missing}"
-            if self._strict_scale_factors:
-                raise ReaderError(msg)
-            warnings.warn(msg, stacklevel=2)
-
-        out = np.full(snap_nums.shape, np.nan, dtype=np.float64)
-        for snap, a in self._snap_to_a.items():
-            out[snap_nums == snap] = a
-        return out
+        return apply_scale_factors(
+            self._snap_to_a,
+            snap_nums,
+            strict=self._strict_scale_factors,
+            reader_name="SubLink reader",
+        )
 
     def _build_halos(self, indices: np.ndarray) -> np.ndarray:
         assert self._node_ids is not None

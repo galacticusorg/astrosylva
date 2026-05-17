@@ -56,10 +56,25 @@ Bundled readers
 Reader             Required ``source`` keys
 ================== ==============================================
 ``consistent_trees`` ``input_path``, ``forests_path``, ``locations_path``
-``lhalotree``        ``input_path``
-``sublink``          ``tree_file``
+``lhalotree``        ``tree_file`` (single) or ``tree_files`` (list)
+``sublink``          ``tree_file`` (single) or ``tree_files`` (list)
 ``ahf``              ``snapshots`` (list of dicts)
 ================== ==============================================
+
+LHaloTree
+~~~~~~~~~
+
+Reads the 104-byte Millennium / L-Galaxies binary halo struct. Each
+*tree* in the LHaloTree file maps to one Galacticus :class:`Forest`;
+local pointers (``Descendant``, ``FirstHaloInFOFgroup``) are rewritten
+into a global ``nodeIndex`` space (a running counter across trees and
+chunks). Scale-factor lookup uses the same options as SubLink
+(``snapshot_table`` / ``scale_factors`` / ``redshifts``,
+``strict_scale_factors``).
+
+Status: proxies in use. ``scaleRadius`` comes from ``SubHalfMass``
+(half-mass radius), ``angularMomentum`` from the ``Spin`` vector
+(Millennium's specific-J), and dimensionless ``spin`` is left at 0.0.
 
 SubLink multi-chunk loading
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

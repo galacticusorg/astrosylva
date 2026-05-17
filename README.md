@@ -89,8 +89,8 @@ conflicts emit a `MetadataConflictWarning` showing both values.
 |-------------------|---------------|------------------------------------------------|
 | Consistent-Trees  | Implemented   | Full port; column lookup is name-based.        |
 | AHF               | Experimental  | Reads `.AHF_halos` + `.AHF_mtree`.             |
-| SubLink           | Experimental  | HDF5 group walker.                             |
-| LHaloTree         | Skeleton      | Binary header parsed; payload TBD.             |
+| SubLink           | Experimental  | HDF5; multi-chunk, FOF host resolution.        |
+| LHaloTree         | Experimental  | Millennium binary; multi-chunk; some proxies.  |
 
 The Galacticus writer emits `formatVersion = 2`, matching the legacy C tool's
 output layout byte-for-byte (group structure, dataset names, attribute names).
