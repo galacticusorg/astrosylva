@@ -1,3 +1,31 @@
 *~
 *.o
 *.exe
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Docs
+docs/_build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
