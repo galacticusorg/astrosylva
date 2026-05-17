@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from astrosylva.readers import ReaderSource
+from astrosylva.readers.consistent_trees import ConsistentTreesReader
 from astrosylva.readers.lhalotree import LHaloTreeReader
 from astrosylva.readers.sublink import SubLinkReader
 
@@ -28,6 +29,41 @@ def _snapshot(forest) -> tuple[tuple[int, ...], tuple[float, ...]]:
     ids = tuple(int(n) for n in forest.halos["nodeIndex"])
     pos_x = tuple(float(p) for p in forest.halos["position"][:, 0])
     return ids, pos_x
+
+
+# --------------------------------------------------------- Consistent-Trees
+
+
+def _ct_source(ct_data_dir: Path) -> ReaderSource:
+    return ReaderSource(
+        {
+            "input_path": str(ct_data_dir),
+            "forests_path": str(ct_data_dir / "forests.list"),
+            "locations_path": str(ct_data_dir / "locations.dat"),
+        }
+    )
+
+
+def test_ct_iter_is_repeatable(ct_data_dir: Path) -> None:
+    reader = ConsistentTreesReader(_ct_source(ct_data_dir))
+    first = [_snapshot(f) for f in reader]
+    second = [_snapshot(f) for f in reader]
+    assert first == second
+
+
+def test_ct_preserves_forest_list_order_across_trees_in_a_file(
+    ct_data_dir: Path,
+) -> None:
+    """Two trees (1001 and 2001) share one tree file. After the refactor we
+    open that file once and read trees in offset order, but the halos in
+    the yielded forest must still appear in the original `forests.list`
+    order — tree 1001 first, tree 2001 second."""
+    reader = ConsistentTreesReader(_ct_source(ct_data_dir))
+    forest = next(iter(reader))
+    node_ids = [int(n) for n in forest.halos["nodeIndex"]]
+    # Fixture: tree 1001 holds halos 1, 2; tree 2001 holds halos 3, 4.
+    # forests.list lists 1001 before 2001, so we expect [1, 2, 3, 4].
+    assert node_ids == [1, 2, 3, 4]
 
 
 # --------------------------------------------------------------- LHaloTree

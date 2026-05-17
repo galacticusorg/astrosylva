@@ -17,7 +17,7 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TextIO
 
 import numpy as np
 
@@ -261,17 +261,50 @@ class ConsistentTreesReader(TreeReader):
     # ----------------------------------------------------------- loading
 
     def _load_forest(self, forest_ref: _ForestRef) -> Forest:
-        halos_per_tree: list[np.ndarray] = []
-        for tree in forest_ref.trees:
-            halos_per_tree.append(self._load_tree(tree))
-        halos = np.concatenate(halos_per_tree) if halos_per_tree else np.empty(0, dtype=HALO_DTYPE)
+        """Materialise one forest, opening each tree file at most once.
+
+        Trees in a forest commonly live in the same ``tree_*.dat``
+        file; iterating per-tree would reopen it N times. We group
+        trees by file, open each file once, read its trees in offset
+        order (sequential I/O), then restore the original
+        ``forests.list`` order in the concatenated output.
+        """
+        if not forest_ref.trees:
+            return Forest(
+                forest_id=forest_ref.forest_id,
+                halos=np.empty(0, dtype=HALO_DTYPE),
+                weight=forest_ref.weight,
+            )
+
+        trees_by_file: dict[Path, list[tuple[int, _TreeRef]]] = {}
+        for i, tree in enumerate(forest_ref.trees):
+            trees_by_file.setdefault(tree.file_path, []).append((i, tree))
+
+        indexed_halos: list[tuple[int, np.ndarray]] = []
+        for file_path, indexed_trees in trees_by_file.items():
+            # Process in offset order to keep file reads sequential.
+            indexed_trees.sort(key=lambda it: it[1].offset)
+            with file_path.open() as fh:
+                for i, tree in indexed_trees:
+                    indexed_halos.append((i, self._load_tree(fh, tree)))
+
+        # Restore original tree order before concatenating.
+        indexed_halos.sort(key=lambda ih: ih[0])
+        halos_per_tree = [halos for _, halos in indexed_halos]
+        halos = np.concatenate(halos_per_tree)
         return Forest(
             forest_id=forest_ref.forest_id,
             halos=halos,
             weight=forest_ref.weight,
         )
 
-    def _load_tree(self, tree: _TreeRef) -> np.ndarray:
+    def _load_tree(self, fh: TextIO, tree: _TreeRef) -> np.ndarray:
+        """Parse one tree's halos from an already-open file handle.
+
+        Caller is responsible for opening / closing ``fh``; this method
+        seeks to ``tree.offset`` and reads forward until the next ``#``
+        line or EOF.
+        """
         cols = self._column_map(tree.file_path)
         try:
             i_scale = cols["scale"]
@@ -298,14 +331,13 @@ class ConsistentTreesReader(TreeReader):
         # Read raw rows starting at the tree's byte offset, stopping at the
         # next ``#`` line or EOF.
         rows: list[list[str]] = []
-        with tree.file_path.open() as fh:
-            fh.seek(tree.offset)
-            for line in fh:
-                if not line.strip():
-                    continue
-                if line.startswith("#"):
-                    break
-                rows.append(line.split())
+        fh.seek(tree.offset)
+        for line in fh:
+            if not line.strip():
+                continue
+            if line.startswith("#"):
+                break
+            rows.append(line.split())
         if not rows:
             return np.empty(0, dtype=HALO_DTYPE)
 
