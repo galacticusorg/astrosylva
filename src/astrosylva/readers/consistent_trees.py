@@ -319,6 +319,7 @@ class ConsistentTreesReader(TreeReader):
             halos["expansionFactor"][k] = float(row[i_scale])
             halos["nodeMass"][k] = float(row[i_mvir])
             halos["scaleRadius"][k] = float(row[i_rs]) * _RS_KPC_TO_MPC
+            halos["halfMassRadius"][k] = np.nan
             halos["position"][k, 0] = float(row[i_x])
             halos["position"][k, 1] = float(row[i_y])
             halos["position"][k, 2] = float(row[i_z])

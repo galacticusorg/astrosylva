@@ -44,6 +44,7 @@ def test_writer_streams_multiple_forests(tmp_path: Path) -> None:
         halos = f["forestHalos"]
         assert halos["nodeIndex"].shape == (9,)
         assert halos["position"].shape == (9, 3)
+        assert halos["halfMassRadius"].shape == (9,)
         np.testing.assert_array_equal(
             halos["nodeIndex"][:],
             np.concatenate([forest.halos["nodeIndex"] for forest in forests]),

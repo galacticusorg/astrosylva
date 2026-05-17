@@ -24,6 +24,7 @@ HALO_DTYPE = np.dtype(
         ("expansionFactor", "<f8"),
         ("nodeMass", "<f8"),
         ("scaleRadius", "<f8"),
+        ("halfMassRadius", "<f8"),
         ("position", "<f8", (3,)),
         ("velocity", "<f8", (3,)),
         ("angularMomentum", "<f8", (3,)),

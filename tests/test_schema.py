@@ -16,6 +16,7 @@ def test_halo_dtype_field_names() -> None:
         "expansionFactor",
         "nodeMass",
         "scaleRadius",
+        "halfMassRadius",
         "position",
         "velocity",
         "angularMomentum",

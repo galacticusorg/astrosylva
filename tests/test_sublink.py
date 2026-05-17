@@ -37,6 +37,16 @@ def test_sublink_scale_factors_inline_dict(sublink_tree_file: Path) -> None:
     )
 
 
+def test_sublink_routes_halfmassrad_to_half_mass_radius(sublink_tree_file: Path) -> None:
+    """SubhaloHalfmassRad is a half-mass radius, not an NFW Rs."""
+    reader = SubLinkReader(_source(sublink_tree_file), options={"scale_factors": SCALE_FACTORS})
+    forest = next(iter(reader))
+    # Fixture writes SubhaloHalfmassRad = [5.0, 10.0, 20.0] kpc/h.
+    np.testing.assert_allclose(forest.halos["halfMassRadius"], [0.005, 0.010, 0.020])
+    # scaleRadius is unknown for SubLink.
+    assert np.all(np.isnan(forest.halos["scaleRadius"]))
+
+
 def test_sublink_redshifts_inline_dict(sublink_tree_file: Path) -> None:
     reader = SubLinkReader(_source(sublink_tree_file), options={"redshifts": REDSHIFTS})
     forest = next(iter(reader))

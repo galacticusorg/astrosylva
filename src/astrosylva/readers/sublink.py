@@ -257,7 +257,11 @@ class SubLinkReader(TreeReader):
         halos["hostIndex"] = _clamp_hosts_to_forest(raw_hosts_forest, node_ids)
         halos["expansionFactor"] = self._scale_factors_for(snap_nums)
         halos["nodeMass"] = self._mass[indices]
-        halos["scaleRadius"] = self._radius[indices]
+        # SubLink stores a half-mass radius (SubhaloHalfmassRad) but no NFW
+        # scale radius, so route it to halfMassRadius and leave scaleRadius
+        # as NaN.
+        halos["scaleRadius"] = np.nan
+        halos["halfMassRadius"] = self._radius[indices]
         halos["position"] = self._position[indices]
         halos["velocity"] = self._velocity[indices]
         halos["angularMomentum"] = self._ang_mom[indices]

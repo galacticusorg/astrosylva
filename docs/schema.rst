@@ -30,11 +30,17 @@ expansion ``a`` dimensionless scale factor
        ("expansionFactor",  "<f8"),
        ("nodeMass",         "<f8"),
        ("scaleRadius",      "<f8"),
+       ("halfMassRadius",   "<f8"),
        ("position",         "<f8", (3,)),
        ("velocity",         "<f8", (3,)),
        ("angularMomentum",  "<f8", (3,)),
        ("spin",             "<f8"),
    ])
+
+``scaleRadius`` is the NFW scale radius. ``halfMassRadius`` is the radius
+enclosing half the halo's mass. Galacticus accepts either (or both);
+readers that have only one of the two leave the other at ``NaN``, which
+the writer faithfully emits.
 
 ``Forest``
 ----------

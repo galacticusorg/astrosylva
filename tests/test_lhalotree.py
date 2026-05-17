@@ -60,6 +60,17 @@ def test_single_tree_expansion_factor_from_snap_table(
     np.testing.assert_array_equal(forest.halos["expansionFactor"], [1.0, 1.0, 0.5, 0.5])
 
 
+def test_single_tree_routes_subhalfmass_to_half_mass_radius(
+    lhalotree_single_tree: Path,
+) -> None:
+    """LHaloTree's SubHalfMass is a half-mass radius, not an NFW Rs."""
+    reader = LHaloTreeReader(_source(lhalotree_single_tree), options={"scale_factors": SCALES})
+    forest = next(iter(reader))
+    np.testing.assert_allclose(forest.halos["halfMassRadius"], [0.05, 0.005, 0.04, 0.004])
+    # scaleRadius is unknown for LHaloTree (no NFW Rs in the struct).
+    assert np.all(np.isnan(forest.halos["scaleRadius"]))
+
+
 def test_single_tree_mass_scaled_by_1e10(lhalotree_single_tree: Path) -> None:
     """Mvir is stored in 10^10 Msun/h units; reader rescales to Msun/h."""
     reader = LHaloTreeReader(_source(lhalotree_single_tree), options={"scale_factors": SCALES})

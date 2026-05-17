@@ -58,16 +58,17 @@ descendantIndex     ``Descendant``       (local → global, or -1)
 hostIndex           ``FirstHaloInFOFgroup`` (local → global, defaults to self)
 expansionFactor     scale-factor table[``SnapNum``]
 nodeMass            ``Mvir`` * 1e10        (10^10 M_sun/h → M_sun/h)
-scaleRadius         ``SubHalfMass``       (half-mass radius, Mpc/h)
+scaleRadius         NaN                   (NFW Rs not stored)
+halfMassRadius      ``SubHalfMass``       (Mpc/h)
 position            ``Pos``               (Mpc/h)
 velocity            ``Vel``               (km/s; Hubble flow not removed)
 angularMomentum     ``Spin``              (Millennium specific-J vector)
 spin                0.0                   (dimensionless spin not stored)
 ==================  =======================================================
 
-Status: experimental — proxy fields are documented above. Multi-file
-runs are supported via ``tree_files``; halo indices are kept globally
-unique across chunks.
+Status: experimental — see the proxy notes above. Multi-file runs are
+supported via ``tree_files``; halo indices are kept globally unique
+across chunks.
 """
 
 from __future__ import annotations
@@ -228,7 +229,11 @@ class LHaloTreeReader(TreeReader):
             reader_name="LHaloTree reader",
         )
         halos["nodeMass"] = raw["Mvir"].astype(np.float64) * 1e10
-        halos["scaleRadius"] = raw["SubHalfMass"].astype(np.float64)
+        # LHaloTree stores a half-mass radius (SubHalfMass) but no NFW
+        # scale radius, so route it to halfMassRadius and leave
+        # scaleRadius as NaN.
+        halos["scaleRadius"] = np.nan
+        halos["halfMassRadius"] = raw["SubHalfMass"].astype(np.float64)
         halos["position"] = raw["Pos"].astype(np.float64)
         halos["velocity"] = raw["Vel"].astype(np.float64)
         halos["angularMomentum"] = raw["Spin"].astype(np.float64)

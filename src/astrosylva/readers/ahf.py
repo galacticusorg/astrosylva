@@ -107,6 +107,7 @@ class AHFReader(TreeReader):
             halos["expansionFactor"][k] = a
             halos["nodeMass"][k] = float(row[c["Mvir"]])
             halos["scaleRadius"][k] = float(row[c["Rvir"]]) / 1000.0  # kpc/h -> Mpc/h
+            halos["halfMassRadius"][k] = np.nan  # AHF default output lacks half-mass radius
             halos["position"][k, 0] = float(row[c["Xc"]]) / 1000.0
             halos["position"][k, 1] = float(row[c["Yc"]]) / 1000.0
             halos["position"][k, 2] = float(row[c["Zc"]]) / 1000.0

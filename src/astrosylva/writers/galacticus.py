@@ -47,6 +47,7 @@ _SCALAR_DATASETS: tuple[tuple[str, str], ...] = (
     ("expansionFactor", "<f8"),
     ("nodeMass", "<f8"),
     ("scaleRadius", "<f8"),
+    ("halfMassRadius", "<f8"),
     ("spin", "<f8"),
 )
 _VECTOR_DATASETS: tuple[str, ...] = ("position", "velocity", "angularMomentum")
