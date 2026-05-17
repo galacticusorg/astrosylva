@@ -67,7 +67,8 @@ def sublink_tree_file(tmp_path: Path) -> Path:
     """Synthesise a minimal SubLink-style HDF5 tree file.
 
     Three subhalos belonging to one forest (RootDescendantID = 100) at
-    SnapNum 2, 1, 0. SubhaloMass is in 10^10 Msun/h, positions in kpc/h.
+    SnapNum 2, 1, 0, each the sole member of its FOF group (so each is
+    its own central). SubhaloMass is in 10^10 Msun/h, positions in kpc/h.
     """
     path = tmp_path / "tree_extended.0.hdf5"
     n = 3
@@ -79,6 +80,9 @@ def sublink_tree_file(tmp_path: Path) -> Path:
         f.create_dataset("RootDescendantID", data=np.full(n, 100, dtype=np.int64))
         f.create_dataset("TreeID", data=np.full(n, 1, dtype=np.int64))
         f.create_dataset("SnapNum", data=np.array([2, 1, 0], dtype=np.int32))
+        f.create_dataset("FirstSubhaloInFOFGroupID", data=np.array([300, 200, 100], dtype=np.int64))
+        f.create_dataset("SubhaloGrNr", data=np.array([0, 0, 0], dtype=np.int32))
+        f.create_dataset("SubfindID", data=np.array([0, 0, 0], dtype=np.int32))
         f.create_dataset("SubhaloMass", data=np.array([10.0, 50.0, 100.0], dtype=np.float32))
         f.create_dataset("SubhaloHalfmassRad", data=np.array([5.0, 10.0, 20.0], dtype=np.float32))
         f.create_dataset(
@@ -102,4 +106,75 @@ def sublink_tree_file(tmp_path: Path) -> Path:
                 dtype=np.float32,
             ),
         )
+    return path
+
+
+def _write_sublink_hosts_fixture(
+    path: Path,
+    *,
+    include_first_sub_in_fof: bool,
+    include_grnr_subfind: bool,
+) -> None:
+    """Write a 4-subhalo fixture with a non-trivial FOF group at each snap.
+
+    Layout (all in one forest, RootDescendantID = 100 for simplicity):
+
+    Snap 1: 100 (central, FOF 0, SubfindID 0), 101 (satellite, FOF 0, SubfindID 1)
+    Snap 0: 200 (central, FOF 0, SubfindID 0), 201 (satellite, FOF 0, SubfindID 1)
+
+    Descendants: 200 -> 100, 201 -> 101, 100/101 -> -1.
+    """
+    with h5py.File(path, "w") as f:
+        ids = np.array([100, 101, 200, 201], dtype=np.int64)
+        desc = np.array([-1, -1, 100, 101], dtype=np.int64)
+        snaps = np.array([1, 1, 0, 0], dtype=np.int32)
+        f.create_dataset("SubhaloID", data=ids)
+        f.create_dataset("DescendantID", data=desc)
+        f.create_dataset("FirstProgenitorID", data=np.array([200, 201, -1, -1], dtype=np.int64))
+        f.create_dataset("NextProgenitorID", data=np.full(4, -1, dtype=np.int64))
+        f.create_dataset("RootDescendantID", data=np.full(4, 100, dtype=np.int64))
+        f.create_dataset("TreeID", data=np.full(4, 1, dtype=np.int64))
+        f.create_dataset("SnapNum", data=snaps)
+        f.create_dataset("SubhaloMass", data=np.array([100.0, 10.0, 80.0, 8.0], dtype=np.float32))
+        f.create_dataset(
+            "SubhaloHalfmassRad", data=np.array([20.0, 5.0, 18.0, 4.0], dtype=np.float32)
+        )
+        f.create_dataset(
+            "SubhaloPos",
+            data=np.array([[0.0] * 3, [1.0] * 3, [0.0] * 3, [1.0] * 3], dtype=np.float32),
+        )
+        f.create_dataset("SubhaloVel", data=np.zeros((4, 3), dtype=np.float32))
+        f.create_dataset("SubhaloSpin", data=np.zeros((4, 3), dtype=np.float32))
+        if include_first_sub_in_fof:
+            # Central of each FOF group is the lower SubhaloID at the same snap.
+            f.create_dataset(
+                "FirstSubhaloInFOFGroupID",
+                data=np.array([100, 100, 200, 200], dtype=np.int64),
+            )
+        if include_grnr_subfind:
+            f.create_dataset("SubhaloGrNr", data=np.array([0, 0, 0, 0], dtype=np.int32))
+            f.create_dataset("SubfindID", data=np.array([0, 1, 0, 1], dtype=np.int32))
+
+
+@pytest.fixture
+def sublink_hosts_file(tmp_path: Path) -> Path:
+    """SubLink fixture with both /FirstSubhaloInFOFGroupID and FOF columns."""
+    path = tmp_path / "tree_hosts_full.hdf5"
+    _write_sublink_hosts_fixture(path, include_first_sub_in_fof=True, include_grnr_subfind=True)
+    return path
+
+
+@pytest.fixture
+def sublink_hosts_fof_only_file(tmp_path: Path) -> Path:
+    """SubLink fixture without /FirstSubhaloInFOFGroupID, only FOF columns."""
+    path = tmp_path / "tree_hosts_fof_only.hdf5"
+    _write_sublink_hosts_fixture(path, include_first_sub_in_fof=False, include_grnr_subfind=True)
+    return path
+
+
+@pytest.fixture
+def sublink_hosts_no_info_file(tmp_path: Path) -> Path:
+    """SubLink fixture with no host-resolution metadata at all."""
+    path = tmp_path / "tree_hosts_none.hdf5"
+    _write_sublink_hosts_fixture(path, include_first_sub_in_fof=False, include_grnr_subfind=False)
     return path

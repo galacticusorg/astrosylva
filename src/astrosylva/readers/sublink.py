@@ -39,8 +39,26 @@ If no table is supplied or required snaps are missing, the reader raises
 :class:`ReaderError` by default. Pass ``options.strict_scale_factors: false``
 to downgrade these to warnings (missing values become ``NaN``).
 
-Status: experimental — reads a single chunk; host-pointer resolution is
-left to future work.
+Host-pointer resolution
+-----------------------
+
+Galacticus stores a ``hostIndex`` that points each subhalo to the central
+of its FOF group. The reader resolves it via ``options.host_resolution``:
+
+- ``"auto"`` (default): use ``/FirstSubhaloInFOFGroupID`` if present,
+  else compute hosts from ``/SubhaloGrNr`` + ``/SubfindID`` (the
+  subhalo with ``SubfindID == 0`` in each ``(SnapNum, SubhaloGrNr)``
+  bucket is the central), else fall back to self-host with a warning.
+- ``"field"``: require ``/FirstSubhaloInFOFGroupID``; raise otherwise.
+- ``"fof_compute"``: require ``/SubhaloGrNr`` + ``/SubfindID``; raise
+  otherwise.
+- ``"self"``: every subhalo is its own host.
+
+Host pointers that reference a subhalo outside the current forest
+(common across SubLink chunks) are silently remapped to self, matching
+Galacticus's "no host" convention.
+
+Status: experimental — reads a single chunk.
 """
 
 from __future__ import annotations
@@ -94,6 +112,12 @@ class SubLinkReader(TreeReader):
     def __init__(self, source: ReaderSource, options: dict[str, Any] | None = None) -> None:
         super().__init__(source, options)
         self._strict_scale_factors = bool(self.options.get("strict_scale_factors", True))
+        self._host_resolution: str = self.options.get("host_resolution", "auto")
+        if self._host_resolution not in ("auto", "field", "fof_compute", "self"):
+            raise ReaderError(
+                "host_resolution must be one of 'auto', 'field', 'fof_compute', 'self'; "
+                f"got {self._host_resolution!r}"
+            )
         self._snap_to_a = self._load_snap_table()
         self._forest_ids: np.ndarray | None = None
 
@@ -178,12 +202,11 @@ class SubLinkReader(TreeReader):
     def _build_halos(self, f: h5py.File, mask: np.ndarray) -> np.ndarray:
         n = int(mask.sum())
         halos = np.empty(n, dtype=HALO_DTYPE)
-        halos["nodeIndex"] = f["SubhaloID"][mask]
+        node_ids = f["SubhaloID"][mask].astype(np.int64)
+        halos["nodeIndex"] = node_ids
         halos["descendantIndex"] = f["DescendantID"][mask]
-        # SubLink doesn't have a direct host pointer at this level; default
-        # to self until a host-resolution step is wired in.
-        halos["hostIndex"] = halos["nodeIndex"]
         snap_nums = f["SnapNum"][mask].astype(np.int64)
+        halos["hostIndex"] = self._resolve_hosts(f, mask, node_ids, snap_nums)
         halos["expansionFactor"] = self._scale_factors_for(snap_nums)
         halos["nodeMass"] = f["SubhaloMass"][mask].astype(np.float64) * 1e10  # 10^10 Msun/h
         halos["scaleRadius"] = f["SubhaloHalfmassRad"][mask].astype(np.float64) / 1000.0
@@ -192,3 +215,81 @@ class SubLinkReader(TreeReader):
         halos["angularMomentum"] = f["SubhaloSpin"][mask].astype(np.float64)
         halos["spin"] = 0.0
         return halos
+
+    def _resolve_hosts(
+        self,
+        f: h5py.File,
+        mask: np.ndarray,
+        node_ids: np.ndarray,
+        snap_nums: np.ndarray,
+    ) -> np.ndarray:
+        mode = self._host_resolution
+        if mode == "self":
+            return np.array(node_ids, copy=True)
+
+        if mode in ("auto", "field") and "FirstSubhaloInFOFGroupID" in f:
+            hosts = np.asarray(f["FirstSubhaloInFOFGroupID"][mask], dtype=np.int64)
+            return _clamp_hosts_to_forest(hosts, node_ids)
+        if mode == "field":
+            raise ReaderError(
+                "host_resolution='field' requires /FirstSubhaloInFOFGroupID in the SubLink file."
+            )
+
+        if mode in ("auto", "fof_compute"):
+            has_grnr = "SubhaloGrNr" in f
+            has_subfind = "SubfindID" in f
+            if has_grnr and has_subfind:
+                grnr = np.asarray(f["SubhaloGrNr"][mask], dtype=np.int64)
+                subfind = np.asarray(f["SubfindID"][mask], dtype=np.int64)
+                return _hosts_from_fof(node_ids, snap_nums, grnr, subfind)
+            if mode == "fof_compute":
+                raise ReaderError(
+                    "host_resolution='fof_compute' requires both /SubhaloGrNr and "
+                    "/SubfindID in the SubLink file."
+                )
+
+        warnings.warn(
+            "SubLink file has no /FirstSubhaloInFOFGroupID and no "
+            "/SubhaloGrNr+/SubfindID; falling back to self-host. "
+            "Set options.host_resolution='self' to silence this warning.",
+            stacklevel=2,
+        )
+        return np.array(node_ids, copy=True)
+
+
+def _clamp_hosts_to_forest(hosts: np.ndarray, node_ids: np.ndarray) -> np.ndarray:
+    """Remap host pointers that fall outside the current forest's nodes to self."""
+    in_forest = np.isin(hosts, node_ids)
+    out = np.array(hosts, copy=True)
+    out[~in_forest] = node_ids[~in_forest]
+    return out
+
+
+def _hosts_from_fof(
+    node_ids: np.ndarray,
+    snap_nums: np.ndarray,
+    grnr: np.ndarray,
+    subfind: np.ndarray,
+) -> np.ndarray:
+    """Resolve hostIndex from (SnapNum, SubhaloGrNr) FOF groups.
+
+    The subhalo with ``SubfindID == 0`` is the central of its FOF group;
+    every other subhalo in the same ``(snap, grnr)`` bucket points to it.
+    Subhalos whose central is not in this forest's slice fall back to self.
+    """
+    out = np.array(node_ids, copy=True)
+    central_mask = subfind == 0
+    central_map: dict[tuple[int, int], int] = {
+        (int(s), int(g)): int(nid)
+        for s, g, nid in zip(
+            snap_nums[central_mask],
+            grnr[central_mask],
+            node_ids[central_mask],
+            strict=False,
+        )
+    }
+    for i in range(node_ids.shape[0]):
+        cid = central_map.get((int(snap_nums[i]), int(grnr[i])))
+        if cid is not None:
+            out[i] = cid
+    return out

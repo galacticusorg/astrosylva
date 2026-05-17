@@ -78,3 +78,23 @@ factor. Supply one of, in priority order:
 By default a missing table or missing snap raises
 :class:`ReaderError`. Set ``options.strict_scale_factors: false`` to
 downgrade to a warning (missing values become ``NaN``).
+
+SubLink host-pointer resolution
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Galacticus needs each subhalo's ``hostIndex`` to point to its FOF
+central. Control how the reader resolves this with
+``options.host_resolution``:
+
+- ``"auto"`` (default): use ``/FirstSubhaloInFOFGroupID`` if present,
+  else compute from ``/SubhaloGrNr`` + ``/SubfindID``
+  (``SubfindID == 0`` marks the central in each
+  ``(SnapNum, SubhaloGrNr)`` bucket), else fall back to self-host with
+  a warning.
+- ``"field"``: require ``/FirstSubhaloInFOFGroupID``; raise otherwise.
+- ``"fof_compute"``: require ``/SubhaloGrNr`` + ``/SubfindID``; raise
+  otherwise.
+- ``"self"``: every subhalo is its own host (silent).
+
+Hosts pointing to subhalos in a different SubLink chunk are silently
+remapped to self, matching Galacticus's "no host" convention.
