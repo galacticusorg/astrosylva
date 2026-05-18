@@ -12,9 +12,10 @@ Supports:
 - **SubLink** (IllustrisTNG-style HDF5)
 - **AHF** (Amiga Halo Finder MergerTree output)
 
-This package is a Python port of the original C utility `rockstar2galacticus`
-(see legacy sources in this repository). The C tool is preserved for
-reference; new development happens in `src/astrosylva/`.
+This package is a Python port of the original C utility `rockstar2galacticus`.
+The legacy C sources are preserved on the `rockstar2galacticus` branch of
+this repository for reference; new development happens on `main` in
+`src/astrosylva/`.
 
 ## Install
 

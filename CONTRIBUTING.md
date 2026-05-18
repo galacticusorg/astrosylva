@@ -40,7 +40,10 @@ second; ytree integration tests skip silently unless
 | `src/astrosylva/cli.py` | The `astrosylva` entry-point (`convert`, `readers`, `validate`). |
 | `tests/` | Per-reader tests plus `test_cross_reader.py` (four-way equivalence) and `test_streaming.py` (memory contracts). |
 | `docs/` | Sphinx skeleton + the user-facing reference. |
-| `*.c`, `*.h`, `Makefile` | The original C tool, preserved as reference. |
+
+The original C tool that astrosylva replaces is preserved on the
+[`rockstar2galacticus`](https://github.com/galacticusorg/rockstar2galacticus/tree/rockstar2galacticus)
+branch.
 
 ## Adding a new reader
 
