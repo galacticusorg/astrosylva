@@ -1,5 +1,9 @@
 
  Converter from Consistent_Trees output to galacticus input format
+ 
+***THIS CODE IS OBSOLETED BUT IS PRESERVED ON THIS `rockstar2galacticus` BRANCH FOR REFERNCE***
+
+***NEW WORK SHOULD USE THE `master` BRANCH WHICH CONTAINS THE NEW `astrosylva` CODE
 
 This program can be used to convert merger trees generated with
 Consistent-Trees.
