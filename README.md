@@ -97,4 +97,10 @@ output layout byte-for-byte (group structure, dataset names, attribute names).
 
 ## License
 
-GPL-3.0-or-later.
+MIT — see [`LICENSE`](LICENSE).
+
+## Contributing
+
+Bug reports, feature requests, and pull requests welcome. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev-loop guide and
+[`CONTRIBUTORS.md`](CONTRIBUTORS.md) for credits.

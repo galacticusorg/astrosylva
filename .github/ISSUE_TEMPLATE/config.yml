@@ -1,0 +1,10 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Galacticus documentation
+    url: https://github.com/galacticusorg/galacticus
+    about: Questions about Galacticus itself (the consumer of these HDF5 files)
+      belong on the Galacticus repo.
+  - name: ytree (sample data)
+    url: https://ytree.readthedocs.io
+    about: Questions about the merger-tree sample datasets we use for
+      integration testing.
