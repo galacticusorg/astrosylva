@@ -1,4 +1,14 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/galacticusorg/astrosylva/master/assets/astrosylva.png" alt="astrosylva" width="320">
+</p>
+
 # astrosylva
+
+[![PyPI version](https://img.shields.io/pypi/v/astrosylva.svg)](https://pypi.org/project/astrosylva/)
+[![Python versions](https://img.shields.io/pypi/pyversions/astrosylva.svg)](https://pypi.org/project/astrosylva/)
+[![Documentation Status](https://readthedocs.org/projects/astrosylva/badge/?version=latest)](https://astrosylva.readthedocs.io/en/latest/)
+[![CI](https://github.com/galacticusorg/astrosylva/actions/workflows/ci.yml/badge.svg)](https://github.com/galacticusorg/astrosylva/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 > *Carry merger trees from the forest to Galacticus.*
 
