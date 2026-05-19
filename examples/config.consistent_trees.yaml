@@ -1,0 +1,36 @@
+# Example astrosylva configuration for a Consistent-Trees (Rockstar) input.
+
+reader:
+  name: consistent_trees
+  source:
+    input_path: ./Illustris-3/tree/trees/
+    forests_path: ./Illustris-3/tree/forests.list
+    locations_path: ./Illustris-3/tree/locations.dat
+  options:
+    host_source: pid              # "pid" matches the legacy C tool; "upid" follows CT's ultimate-parent convention.
+    scale_radius_source: rs       # "rs" or "rs_klypin"
+
+writer:
+  output_path: galacticus_illustris3.hdf5
+
+metadata:
+  cosmology:
+    HubbleParam: 0.704
+    Omega0: 0.2726
+    OmegaLambda: 0.7274
+    OmegaBaryon: 0.0456
+    sigma_8: 0.809
+  simulation:
+    boxSize: 75000.0
+    simulationCode: AREPO
+    simulationICs: NGENIC
+    startRedshift: 127.0
+  groupFinder:
+    groupFinderCode: rockstar
+    linkingLength: 0.0
+    minimumParticleNumber: 10
+  haloTrees:
+    haloMassesIncludeSubhalos: 1
+    forestsAreSelfContained: 1
+    treesHaveSubhalos: 1
+    velocitiesIncludeHubbleFlow: 0
