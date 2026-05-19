@@ -14,6 +14,7 @@ input format.
    schema
    readers
    integration
+   api
 
 Installation
 ------------

@@ -13,9 +13,9 @@ Supports:
 - **AHF** (Amiga Halo Finder MergerTree output)
 
 This package is a Python port of the original C utility `rockstar2galacticus`.
-The legacy C sources are preserved on the `rockstar2galacticus` branch of
-this repository for reference; new development happens on `main` in
-`src/astrosylva/`.
+The legacy C sources are preserved at
+[`galacticusorg/rockstar2galacticus`](https://github.com/galacticusorg/rockstar2galacticus)
+for reference; new development happens here in `src/astrosylva/`.
 
 ## Install
 
