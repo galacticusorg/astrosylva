@@ -52,14 +52,20 @@ A reader **must**:
 Bundled readers
 ---------------
 
-================== ==============================================
-Reader             Required ``source`` keys
-================== ==============================================
-``consistent_trees`` ``input_path``, ``forests_path``, ``locations_path``
-``lhalotree``        ``tree_file`` (single) or ``tree_files`` (list)
-``sublink``          ``tree_file`` (single) or ``tree_files`` (list)
-``ahf``              ``snapshots`` (list of dicts)
-================== ==============================================
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Reader
+     - Required ``source`` keys
+   * - ``consistent_trees``
+     - ``input_path``, ``forests_path``, ``locations_path``
+   * - ``lhalotree``
+     - ``tree_file`` (single) or ``tree_files`` (list)
+   * - ``sublink``
+     - ``tree_file`` (single) or ``tree_files`` (list)
+   * - ``ahf``
+     - ``snapshots`` (list of dicts)
 
 LHaloTree
 ~~~~~~~~~
