@@ -8,15 +8,22 @@ new readers cheap to add.
 Units
 -----
 
-============== ==============================================
-Quantity       Units
-============== ==============================================
-length         Mpc/h (comoving)
-mass           M_sun/h
-velocity       km/s (peculiar; no Hubble flow)
-spin           dimensionless (Bullock)
-expansion ``a`` dimensionless scale factor
-============== ==============================================
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Quantity
+     - Units
+   * - length
+     - Mpc/h (comoving)
+   * - mass
+     - M_sun/h
+   * - velocity
+     - km/s (peculiar; no Hubble flow)
+   * - spin
+     - dimensionless (Bullock)
+   * - expansion ``a``
+     - dimensionless scale factor
 
 ``Halo`` dtype
 --------------

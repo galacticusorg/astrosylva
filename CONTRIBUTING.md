@@ -8,8 +8,8 @@ reports, format-coverage additions, performance work, documentation.
 ## Development setup
 
 ```bash
-git clone https://github.com/galacticusorg/rockstar2galacticus.git
-cd rockstar2galacticus
+git clone https://github.com/galacticusorg/astrosylva.git
+cd astrosylva
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
@@ -41,9 +41,8 @@ second; ytree integration tests skip silently unless
 | `tests/` | Per-reader tests plus `test_cross_reader.py` (four-way equivalence) and `test_streaming.py` (memory contracts). |
 | `docs/` | Sphinx skeleton + the user-facing reference. |
 
-The original C tool that astrosylva replaces is preserved on the
-[`rockstar2galacticus`](https://github.com/galacticusorg/rockstar2galacticus/tree/rockstar2galacticus)
-branch.
+The original C tool that astrosylva replaces is preserved at
+[`galacticusorg/rockstar2galacticus`](https://github.com/galacticusorg/rockstar2galacticus).
 
 ## Adding a new reader
 

@@ -57,9 +57,10 @@ sublink = "astrosylva.readers.sublink:SubLinkReader"
 ahf = "astrosylva.readers.ahf:AHFReader"
 
 [project.urls]
-Homepage = "https://github.com/galacticusorg/rockstar2galacticus"
-Source = "https://github.com/galacticusorg/rockstar2galacticus"
-Issues = "https://github.com/galacticusorg/rockstar2galacticus/issues"
+Homepage = "https://github.com/galacticusorg/astrosylva"
+Source = "https://github.com/galacticusorg/astrosylva"
+Issues = "https://github.com/galacticusorg/astrosylva/issues"
+Documentation = "https://astrosylva.readthedocs.io"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/astrosylva"]
